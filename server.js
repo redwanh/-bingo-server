@@ -29,6 +29,8 @@ const allowedOrigins = [
     'http://127.0.0.1:3000',
     'http://127.0.0.1:3001',
     'http://127.0.0.1:5000',
+     'https://bingo-admin-9z6w.onrender.com',      // 🔥 ADD THIS
+    'https://bingo-server-kd6t.onrender.com',  
 ];
 
 // Add production URLs if set
