@@ -13,10 +13,7 @@ const GameEngine = require('./src/services/gameEngine');
 const GameSocket = require('./src/socket/gameSocket');
 const GameConfig = require('./src/models/GameConfig');
 const timerManager = require('./src/utils/TimerManager');
-app.get('/health', (req, res) => {
-    res.header('Access-Control-Allow-Origin', '*');
-    res.json({ status: 'ok', timestamp: new Date().toISOString() });
-});
+
 
 // ============================================
 // ENVIRONMENT VARIABLES
@@ -52,6 +49,10 @@ const app = express();
 // ============================================
 // CORS - MUST BE FIRST
 // ============================================
+app.get('/health', (req, res) => {
+    res.header('Access-Control-Allow-Origin', '*');
+    res.json({ status: 'ok', timestamp: new Date().toISOString() });
+});
 app.use(cors({ 
     origin: allowedOrigins,
     credentials: true,
