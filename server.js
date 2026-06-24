@@ -13,6 +13,10 @@ const GameEngine = require('./src/services/gameEngine');
 const GameSocket = require('./src/socket/gameSocket');
 const GameConfig = require('./src/models/GameConfig');
 const timerManager = require('./src/utils/TimerManager');
+app.get('/health', (req, res) => {
+    res.header('Access-Control-Allow-Origin', '*');
+    res.json({ status: 'ok', timestamp: new Date().toISOString() });
+});
 
 // ============================================
 // ENVIRONMENT VARIABLES
@@ -121,10 +125,7 @@ app.use('/api/notifications', require('./src/routes/notificationRoutes'));
 app.use('/api/game', require('./src/routes/gameRoutes'));
 app.use('/api/scheduled-games', require('./src/routes/scheduledGameRoutes'));
 
-// Health check
-app.get('/health', (req, res) => {
-    res.json({ status: 'ok', timestamp: new Date().toISOString() });
-});
+
 
 // Error handler
 app.use(errorHandler);
