@@ -14,6 +14,7 @@ const ALLOWED_ORIGINS = [
     'http://127.0.0.1:5000',
     'https://bingo-admin-9z6w.onrender.com',      
     'https://bingo-server-kd6t.onrender.com',
+    'https://player-app-0qoe.onrender.com/',
 ];
 
 // Allowed methods
