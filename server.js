@@ -55,7 +55,7 @@ app.get('/health', (req, res) => {
     res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 app.use(cors({ 
-    origin: allowedOrigins,
+    origin: '*', // TEMP: Allow all for testing
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization']
@@ -95,7 +95,7 @@ const server = http.createServer({ maxHeaderSize: 65536 }, app);
 // ============================================
 const io = socketIo(server, { 
     cors: { 
-        origin: allowedOrigins,
+        origin: '*', // TEMP: Allow all for testing
         methods: ['GET', 'POST'],
         credentials: true
     },
