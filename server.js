@@ -30,9 +30,9 @@ const allowedOrigins = [
     'http://127.0.0.1:3000',
     'http://127.0.0.1:3001',
     'http://127.0.0.1:5000',
-     'https://bingo-admin-9z6w.onrender.com',      // 🔥 ADD THIS
+    'https://bingo-admin-9z6w.onrender.com',
     'https://bingo-server-kd6t.onrender.com',
-    'https://player-app-0qoe.onrender.com',  
+    'https://player-app-0qoe.onrender.com',
 ];
 
 // Add production URLs if set
@@ -48,28 +48,35 @@ if (PRODUCTION_URL) {
 const app = express();
 
 // ============================================
-// CORS - MUST BE FIRST
+// CORS - RAW MIDDLEWARE (MUST BE FIRST)
 // ============================================
+app.use(function(req, res, next) {
+    const origin = req.headers.origin;
+    
+    // Allow all origins
+    res.header('Access-Control-Allow-Origin', origin || '*');
+    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS');
+    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept');
+    res.header('Access-Control-Allow-Credentials', 'true');
+    res.header('Access-Control-Max-Age', '86400');
+    
+    // Handle preflight
+    if (req.method === 'OPTIONS') {
+        return res.status(200).end();
+    }
+    
+    next();
+});
+
 app.get('/health', (req, res) => {
-    res.header('Access-Control-Allow-Origin', '*');
     res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
-app.use(cors({ 
-    origin: '*', // TEMP: Allow all for testing
-    credentials: true,
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization']
-}));
-app.options('*', cors());
 
 // ============================================
-// SECURITY
+// BODY PARSING (BEFORE ROUTES)
 // ============================================
-app.use(helmet({
-    contentSecurityPolicy: false,
-    crossOriginEmbedderPolicy: false,
-    crossOriginResourcePolicy: false
-}));
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // Static files
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
@@ -81,9 +88,15 @@ if (NODE_ENV === 'development') {
     app.use(morgan('dev'));
 }
 
-// Body parsing
-app.use(express.json({ limit: '50mb' }));
-app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+// ============================================
+// SECURITY (AFTER STATIC, BEFORE ROUTES)
+// ============================================
+app.use(helmet({
+    contentSecurityPolicy: false,
+    crossOriginEmbedderPolicy: false,
+    crossOriginResourcePolicy: false,
+    crossOriginOpenerPolicy: false,
+}));
 
 // ============================================
 // CREATE HTTP SERVER
@@ -95,7 +108,7 @@ const server = http.createServer({ maxHeaderSize: 65536 }, app);
 // ============================================
 const io = socketIo(server, { 
     cors: { 
-        origin: '*', // TEMP: Allow all for testing
+        origin: '*',
         methods: ['GET', 'POST'],
         credentials: true
     },
@@ -126,8 +139,6 @@ app.use('/api/cards', require('./src/routes/cardRoutes'));
 app.use('/api/notifications', require('./src/routes/notificationRoutes'));
 app.use('/api/game', require('./src/routes/gameRoutes'));
 app.use('/api/scheduled-games', require('./src/routes/scheduledGameRoutes'));
-
-
 
 // Error handler
 app.use(errorHandler);

@@ -3,6 +3,16 @@ const router = express.Router();
 const ctrl = require('../controllers/mainBingoController');
 const { protect, authorize } = require('../middleware/auth');
 
+// Handle preflight for APK
+router.options('*', (req, res) => {
+    res.header('Access-Control-Allow-Origin', req.headers.origin || '*');
+    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    res.sendStatus(200);
+});
+
+router.post('/setup', protect, authorize('admin','superadmin'), ctrl.setupGame);
+
 router.post('/setup', protect, authorize('admin','superadmin'), ctrl.setupGame);
 router.put('/prize', protect, authorize('admin','superadmin'), ctrl.setPrize);
 router.post('/start', protect, authorize('admin','superadmin'), ctrl.startGame);
