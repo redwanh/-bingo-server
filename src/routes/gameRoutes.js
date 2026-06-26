@@ -191,6 +191,42 @@ router.get('/history/:roomId', protect, async (req, res) => {
 // TRANSACTIONS
 // ============================================
 
+// Get user's entire game history (all rooms)
+router.get('/history/user/all', protect, async (req, res) => {
+    try {
+        const games = await Game.find({ 
+            'players.userId': req.user.id,
+            status: 'completed' 
+        })
+        .sort({ endTime: -1 })
+        .limit(50)
+        .select('gameId gameNumber roomId prizePool winners playerCount totalCards endTime startTime drawnNumbers');
+        
+        // Add user-specific stats
+        const enriched = games.map(game => {
+            const playerCards = game.players?.find(p => p.userId.toString() === req.user.id)?.cards || [];
+            const isWinner = game.winners?.some(w => w.userId?.toString() === req.user.id);
+            return {
+                gameId: game.gameId,
+                gameNumber: game.gameNumber,
+                roomId: game.roomId,
+                startTime: game.startTime,
+                endTime: game.endTime,
+                totalCards: game.totalCards,
+                playerCount: game.playerCount,
+                myCardsCount: playerCards.length,
+                numbersCalled: game.drawnNumbers?.length || 0,
+                isWinner,
+                prizeWon: isWinner ? game.winners?.find(w => w.userId?.toString() === req.user.id)?.prizeAmount || 0 : 0,
+            };
+        });
+        
+        res.json({ success: true, games: enriched });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
 // Get user transactions
 router.get('/transactions', protect, async (req, res) => {
     try {
