@@ -55,7 +55,17 @@ app.get('/health', (req, res) => {
     res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 app.use(cors({ 
-    origin: '*', // TEMP: Allow all for testing
+    origin: function(origin, callback) {
+        // Allow requests from Capacitor (APK), localhost, and Render domains
+        if (!origin || 
+            origin.startsWith('capacitor://') || 
+            origin.startsWith('http://localhost') ||
+            origin.includes('render.com')) {
+            callback(null, true);
+        } else {
+            callback(null, true); // Allow all for now
+        }
+    },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization']
