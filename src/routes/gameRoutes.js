@@ -191,7 +191,7 @@ router.get('/history/:roomId', protect, async (req, res) => {
 // TRANSACTIONS
 // ============================================
 
-// Get user's entire game history (all rooms)
+// Get user's game history with winning cards and grouped by game
 router.get('/history/user/all', protect, async (req, res) => {
     try {
         const games = await Game.find({ 
@@ -202,10 +202,28 @@ router.get('/history/user/all', protect, async (req, res) => {
         .limit(50)
         .select('gameId gameNumber roomId prizePool winners playerCount totalCards endTime startTime drawnNumbers');
         
-        // Add user-specific stats
+        // Get all user's cards for these games
+        const gameIds = games.map(g => g._id);
+        const userCards = await Card.find({
+            gameId: { $in: gameIds },
+            userId: req.user.id
+        }).select('gameId cardNumber bingoCalled winType price grid');
+        
+        // Group cards by game
+        const cardsByGame = {};
+        userCards.forEach(card => {
+            const gid = card.gameId.toString();
+            if (!cardsByGame[gid]) cardsByGame[gid] = [];
+            cardsByGame[gid].push(card);
+        });
+        
+        // Enrich games with user data
         const enriched = games.map(game => {
-            const playerCards = game.players?.find(p => p.userId.toString() === req.user.id)?.cards || [];
-            const isWinner = game.winners?.some(w => w.userId?.toString() === req.user.id);
+            const gid = game._id.toString();
+            const myCards = cardsByGame[gid] || [];
+            const winningCards = myCards.filter(c => c.bingoCalled);
+            const isWinner = winningCards.length > 0;
+            
             return {
                 gameId: game.gameId,
                 gameNumber: game.gameNumber,
@@ -214,10 +232,23 @@ router.get('/history/user/all', protect, async (req, res) => {
                 endTime: game.endTime,
                 totalCards: game.totalCards,
                 playerCount: game.playerCount,
-                myCardsCount: playerCards.length,
                 numbersCalled: game.drawnNumbers?.length || 0,
+                totalNumbers: 75,
+                myCardsCount: myCards.length,
                 isWinner,
-                prizeWon: isWinner ? game.winners?.find(w => w.userId?.toString() === req.user.id)?.prizeAmount || 0 : 0,
+                prizeWon: isWinner ? (game.winners?.find(w => w.userId?.toString() === req.user.id)?.prizeAmount || 0) : 0,
+                prizePool: game.prizePool,
+                winningCards: winningCards.map(c => ({
+                    cardNumber: c.cardNumber,
+                    winType: c.winType,
+                    grid: c.grid,
+                    price: c.price,
+                })),
+                allMyCards: myCards.map(c => ({
+                    cardNumber: c.cardNumber,
+                    bingoCalled: c.bingoCalled,
+                    price: c.price,
+                })),
             };
         });
         
