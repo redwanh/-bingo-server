@@ -5,8 +5,8 @@ const registerValidation = [
     .matches(/^\+\d{10,15}$/)
     .withMessage('Phone must be in international format (+251912345678)'),
   body('password')
-    .isLength({ min: 8 })
-    .withMessage('Password must be at least 8 characters'),
+    .isLength({ min: 6 })
+    .withMessage('Password must be at least 6 characters'),
   body('fullName')
     .optional()
     .trim()

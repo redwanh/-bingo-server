@@ -12,6 +12,8 @@ const errorHandler = require('./src/middleware/errorHandler');
 const MainBingoEngine = require('./src/services/mainBingoEngine');
 const GameEngine = require('./src/services/gameEngine');
 const GameSocket = require('./src/socket/gameSocket');
+const userGameHistoryRoutes = require('./src/routes/UserGameHistory');
+const mainBingoHistoryRoutes = require('./src/routes/MainBingoHistory');
 
 const CLIENT_URL = process.env.CLIENT_URL || 'http://localhost:3000';
 const PLAYER_URL = process.env.PLAYER_URL || 'http://localhost:3001';
@@ -102,6 +104,8 @@ app.use('/api/cards', require('./src/routes/cardRoutes'));
 app.use('/api/notifications', require('./src/routes/notificationRoutes'));
 app.use('/api/game', require('./src/routes/gameRoutes'));
 app.use('/api/scheduled-games', require('./src/routes/scheduledGameRoutes'));
+app.use('/api/user-game-history', userGameHistoryRoutes);
+app.use('/api/main-bingo-history', mainBingoHistoryRoutes);
 
 const possibleBuildPaths = [
     path.join(__dirname, '..', 'client', 'build'),
@@ -135,6 +139,7 @@ app.use(errorHandler);
 
 const mainBingoEngine = new MainBingoEngine(io);
 const gameEngine = new GameEngine(io);
+
 app.set('gameEngine', gameEngine);
 app.set('io', io);
 app.set('mainBingoEngine', mainBingoEngine);

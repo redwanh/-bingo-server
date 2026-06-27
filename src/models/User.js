@@ -5,7 +5,7 @@ const userSchema = new mongoose.Schema({
   phone: { type: String, required: true, unique: true, trim: true },
   email: { type: String, lowercase: true, trim: true, sparse: true },
   username: { type: String, unique: true, sparse: true, trim: true, minlength: 3, maxlength: 30 },
-  password: { type: String, required: true, minlength: 8, select: false },
+  password: { type: String, required: true, minlength: 6, select: false },
   fullName: { type: String, trim: true },
   role: { type: String, enum: ['user', 'admin', 'superadmin', 'finance', 'game'], default: 'user' },
   tenantId: { type: mongoose.Schema.Types.ObjectId, ref: 'Tenant' },
