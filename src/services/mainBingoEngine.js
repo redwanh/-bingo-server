@@ -135,7 +135,29 @@ async callBingo(userId, cardId) {
   const drawnSet = new Set(drawnNumbers.map(d => d.number));
   console.log('📊 Drawn numbers count:', drawnSet.size);
 
-  // Step 4: Check ALL marked numbers exist in drawn numbers
+   // Step 3.5: Check if LAST called number is on the card
+  if (drawnNumbers.length > 0) {
+    const lastCalled = drawnNumbers[drawnNumbers.length - 1];
+    const cell = card.grid[lastCalled.letter]?.find(c => c.number === lastCalled.number);
+    
+    if (!cell) {
+      console.log('❌ Last called number NOT on this card!');
+      console.log('   Last called:', lastCalled.letter + lastCalled.number);
+      card.isBlocked = true;
+      card.blockReason = 'last_number_not_on_card';
+      await card.save();
+      this.io.emit('mainBingoFalseBingo', { 
+        userId, 
+        cardId, 
+        cardNumber: card.cardNumber,
+        reason: 'last_number_not_on_card',
+        lastCalled: lastCalled.letter + lastCalled.number
+      });
+      return { success: false, reason: 'last_number_not_on_card' };
+    }
+    
+    console.log('✅ Last called number IS on this card:', lastCalled.letter + lastCalled.number);
+  }
 
 
   // Step 5: Get the game rule
