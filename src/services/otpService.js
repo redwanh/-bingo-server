@@ -86,7 +86,10 @@ class OTPService {
       message: 'OTP sent',
       expiresIn: this.EXPIRY_MINUTES * 60,
       // ONLY return code in development
-      code: process.env.NODE_ENV !== 'production' ? code : undefined,
+      code: code,
+
+
+      
       smsProvider: smsResult.provider || 'unknown',
     };
   }
