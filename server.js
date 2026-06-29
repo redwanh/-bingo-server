@@ -88,6 +88,30 @@ const io = socketIo(server, {
 });
 
 connectDB();
+connectDB();
+
+// 🔥 TEMP: Seed cards - DELETE AFTER USE
+app.get('/api/seed-cards', async (req, res) => {
+  try {
+    const Card = require('./src/models/Card');
+    await Card.deleteMany({ status: 'preview' });
+    
+    const cards = [];
+    for (let i = 0; i < 200; i++) {
+      const grid = { B: genCol(1,15), I: genCol(16,30), N: genCol(31,45), G: genCol(46,60), O: genCol(61,75) };
+      grid.N[2] = { number: 0, isMarked: true };
+      cards.push({ gameId: null, userId: null, displayId: 10000 + i, cardNumber: i + 1, grid, price: 50, status: 'preview' });
+    }
+    await Card.insertMany(cards);
+    res.json({ success: true, count: cards.length });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+function genCol(min, max) {
+  const s = new Set();
+  while (s.size < 5) s.add(Math.floor(Math.random() * (max - min + 1)) + min);
+  return Array.from(s).map(n => ({ number: n, isMarked: false }));
+}
 
 app.use('/api/auth', require('./src/routes/authRoutes'));
 app.use('/api/users', require('./src/routes/userRoutes'));
