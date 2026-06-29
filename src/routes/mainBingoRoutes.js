@@ -132,6 +132,236 @@ router.get('/debug-cards', protect, async (req, res) => {
     res.status(500).json({ error: e.message });
   }
 });
+// Add this at the end of the file (before module.exports = router)
+
+// Reset Cards - Clear/Delete/Full Reset (Admin only - Debug/Test)
+// Reset Cards - Clear/Delete/Full Reset (Admin only - Debug/Test)
+router.post('/reset-cards', protect, authorize('admin','superadmin'), async (req, res) => {
+  try {
+    const { mode, gameId, force } = req.body;
+    const Card = require('../models/Card');
+    const User = require('../models/User');
+    const MainBingoGame = require('../models/MainBingoGame');
+    const CardGenerator = require('../services/cardGenerator');
+    
+    let game = null;
+    
+    // If gameId provided, try to find it
+    if (gameId) {
+      game = await MainBingoGame.findById(gameId);
+    }
+    
+    // If no game found, try active game
+    if (!game) {
+      game = await MainBingoGame.findOne({ active: true });
+    }
+    
+    // For full reset mode - Drop and recreate
+    if (mode === 'full-reset') {
+      const mongoose = require('mongoose');
+      const collections = await mongoose.connection.db.listCollections().toArray();
+      const cardsCollectionExists = collections.some(c => c.name === 'cards');
+      
+      if (cardsCollectionExists) {
+        await mongoose.connection.db.dropCollection('cards');
+        console.log('✅ Dropped cards collection');
+      }
+      
+      // Recreate indexes
+      await Card.createIndexes();
+      console.log('✅ Recreated card indexes');
+      
+      // Generate fresh cards using CardGenerator
+      const totalCards = 200; // Number of cards to generate (adjust as needed)
+      console.log(`🔄 Generating ${totalCards} new cards using CardGenerator...`);
+      
+      const BATCH = 500;
+      const batches = Math.ceil(totalCards / BATCH);
+      let inserted = 0;
+      
+      for (let b = 0; b < batches; b++) {
+        const cards = [];
+        const start = b * BATCH + 1;
+        const end = Math.min((b + 1) * BATCH, totalCards);
+        
+        for (let i = start; i <= end; i++) {
+          const card = CardGenerator.generateCard(i);
+          card.displayId = 10000 + i - 1; // Start from 10000 like your seeder
+          card.status = 'preview'; // Set initial status
+          card.gameId = null;
+          card.userId = null;
+          cards.push(card);
+        }
+        
+        await Card.insertMany(cards, { ordered: false });
+        inserted += cards.length;
+      }
+      
+      console.log(`✅ Generated ${inserted} new cards`);
+      
+      // Reset game if exists
+      if (game) {
+        game.totalCards = 0;
+        game.playerCount = 0;
+        game.prizeAmount = 0;
+        game.calledNumbers = [];
+        game.drawnNumbers = [];
+        game.status = 'setup';
+        await game.save();
+      }
+      
+      // Clear all user card references
+      await User.updateMany({}, { $set: { cards: [] } });
+      
+      return res.json({
+        success: true,
+        message: `Full database reset completed. Generated ${inserted} new cards.`,
+        mode: 'full-reset',
+        affectedCards: 0,
+        newCardsGenerated: inserted
+      });
+    }
+    
+    // For delete mode with force (no game needed)
+    if (mode === 'delete' && force) {
+      const deleteResult = await Card.deleteMany({});
+      await User.updateMany({}, { $set: { cards: [] } });
+      
+      // Generate new cards after deletion
+      const totalCards = 100;
+      console.log(`🔄 Generating ${totalCards} new cards after deletion...`);
+      
+      const BATCH = 500;
+      const batches = Math.ceil(totalCards / BATCH);
+      let inserted = 0;
+      
+      for (let b = 0; b < batches; b++) {
+        const cards = [];
+        const start = b * BATCH + 1;
+        const end = Math.min((b + 1) * BATCH, totalCards);
+        
+        for (let i = start; i <= end; i++) {
+          const card = CardGenerator.generateCard(i);
+          card.displayId = 10000 + i - 1;
+          card.status = 'preview';
+          card.gameId = null;
+          card.userId = null;
+          cards.push(card);
+        }
+        
+        await Card.insertMany(cards, { ordered: false });
+        inserted += cards.length;
+      }
+      
+      return res.json({
+        success: true,
+        message: `Deleted ${deleteResult.deletedCount} cards and generated ${inserted} new cards`,
+        mode: 'delete',
+        affectedCards: deleteResult.deletedCount,
+        newCardsGenerated: inserted
+      });
+    }
+    
+    // For clear mode with force
+    if (mode === 'clear' && force) {
+      const clearResult = await Card.updateMany({}, {
+        $set: {
+          markedNumbers: [],
+          isWinner: false,
+          bingoCount: 0,
+          lastMarkedAt: null,
+          status: 'preview',
+          gameId: null,
+          userId: null,
+          isBlocked: false,
+          blockReason: null,
+          bingoCalled: false,
+          cardNumber: null,
+          winType: null
+        }
+      });
+      
+      await User.updateMany({}, { $set: { cards: [] } });
+      
+      return res.json({
+        success: true,
+        message: `Cleared ${clearResult.modifiedCount} cards back to pool`,
+        mode: 'clear',
+        affectedCards: clearResult.modifiedCount,
+        newCardsGenerated: 0
+      });
+    }
+    
+    if (!game) {
+      return res.status(404).json({ error: 'No active game found. Use force mode or full-reset.' });
+    }
+    
+    if (game.status !== 'setup' && !force) {
+      return res.status(400).json({ 
+        error: 'Can only reset cards during setup phase. Current status: ' + game.status 
+      });
+    }
+    
+    let result;
+    
+    if (mode === 'delete') {
+      result = await Card.deleteMany({ gameId: game._id });
+      
+      await User.updateMany(
+        { 'cards.gameId': game._id },
+        { $pull: { cards: { gameId: game._id } } }
+      );
+      
+      console.log(`Deleted ${result.deletedCount} cards`);
+    } else {
+      result = await Card.updateMany(
+        { gameId: game._id },
+        {
+          $set: {
+            markedNumbers: [],
+            isWinner: false,
+            bingoCount: 0,
+            lastMarkedAt: null,
+            status: 'preview',
+            gameId: null,
+            userId: null,
+            isBlocked: false,
+            blockReason: null,
+            bingoCalled: false,
+            cardNumber: null,
+            winType: null
+          }
+        }
+      );
+      
+      console.log(`Cleared ${result.modifiedCount} cards`);
+    }
+    
+    // Reset game stats
+    if (game) {
+      game.totalCards = mode === 'delete' ? 0 : game.totalCards;
+      game.playerCount = mode === 'delete' ? 0 : game.playerCount;
+      game.prizeAmount = 0;
+      game.calledNumbers = [];
+      game.drawnNumbers = [];
+      await game.save();
+    }
+    
+    res.json({
+      success: true,
+      message: mode === 'delete' 
+        ? `Deleted ${result.deletedCount || 0} cards` 
+        : `Cleared ${result.modifiedCount || 0} cards back to pool`,
+      mode: mode,
+      affectedCards: mode === 'delete' ? result.deletedCount : result.modifiedCount,
+      newCardsGenerated: 0
+    });
+    
+  } catch (error) {
+    console.error('Reset cards error:', error);
+    res.status(500).json({ error: 'Failed to reset cards: ' + error.message });
+  }
+});
 
 // DELETE /api/main-bingo/cards/:id
 // server/routes/mainBingo.js
