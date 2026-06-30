@@ -50,8 +50,7 @@ exports.createDeposit = async (req, res, next) => {
     
     const account = await PaymentAccount.findById(paymentAccountId);
     if (!account) return next(new AppError('Payment account not found', 404));
-    if (amount < account.minDeposit) return next(new AppError('Minimum deposit is ' + account.minDeposit + ' ETB', 400));
-    if (amount > account.maxDeposit) return next(new AppError('Maximum deposit is ' + account.maxDeposit + ' ETB', 400));
+    
     
     const isAutoApproved = transactionId === '123456';
     
