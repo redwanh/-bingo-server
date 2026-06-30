@@ -17,6 +17,26 @@ router.get('/config/:roomId', protect, async (req, res) => {
     res.json(config || {});
 });
 
+// ============================================
+// VERIFY GAME - Fix prize pool mismatches
+// ============================================
+router.get('/game/:roomId/verify', protect, async (req, res) => {
+    try {
+        const engine = req.app.get('gameEngine');
+        if (!engine) {
+            return res.status(500).json({ error: 'Game engine not available' });
+        }
+        const result = await engine.verifyAndFixGame(req.params.roomId);
+        res.json({ success: true, ...result });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// ============================================
+// Rest of your routes...
+// ============================================
+
 // Update room config (admin only)
 router.put('/config/:roomId', protect, authorize('admin', 'superadmin'), async (req, res) => {
     const config = await GameConfig.findOneAndUpdate(

@@ -88,3 +88,13 @@ exports.getTransactions = async (req, res) => {
     .sort({ createdAt: -1 }).limit(50);
   res.json(txns);
 };
+
+exports.verifyGame = async (req, res) => {
+    try {
+        const engine = req.app.get('gameEngine');
+        const result = await engine.verifyAndFixGame(req.params.roomId);
+        res.json({ success: true, ...result });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+};
