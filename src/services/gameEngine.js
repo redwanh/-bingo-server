@@ -220,33 +220,158 @@ class GameEngine {
         return {success:true,card};
     }
 
-    async registerCard(roomId, userId, cardId) {
-        const game = await Game.getActiveGame(roomId);
-        if (!game||(game.status!=='scheduled'&&game.status!=='waiting')) throw new Error('Game not available');
-        const config = await GameConfig.findOne({ roomId });
-        const card = await Card.findOne({_id:cardId,gameId:game._id,userId,status:'preview'});
-        if(!card) throw new Error('Card not found');
-        const user = await User.findById(userId);
-        if(user.walletBalance<card.price) throw new Error(`Need ${card.price} ETB`);
-        const ug = await Game.findOneAndUpdate({_id:game._id,status:{$in:['scheduled','waiting']}},{$inc:{totalCards:1,prizePool:card.price},$set:{timerStartedAt:game.players.length===0?new Date():game.timerStartedAt,status:game.players.length===0?'waiting':game.status}},{new:true});
-        if(!ug) throw new Error('Game update failed');
-        card.status='registered';card.cardNumber=ug.totalCards;card.registeredAt=new Date();await card.save();
-        const pi = ug.players.findIndex(p=>p.userId.toString()===userId);
-        if(pi===-1) ug.players.push({userId,cards:[card._id]});
-        else ug.players[pi].cards.push(card._id);
-        await ug.save();
-        user.walletBalance-=card.price;await user.save();
-        await Transaction.create({userId,type:'card_purchase',amount:-card.price,gameId:ug.gameId,gameNumber:ug.gameNumber,description:`Card #${card.cardNumber}`,balanceAfter:user.walletBalance,cardId:card._id});
-       if(ug.players.length===1) {
-    console.log(`[REGISTER] First player! Starting countdown...`);
-    this.startCountdown(roomId, ug, config);
-}
-        this.io.to(roomId).emit('cardRegistered',{userId,cardId:card._id,cardNumber:card.cardNumber,totalCards:ug.totalCards,playerCount:ug.players.length,prizePool:ug.prizePool,timerStartedAt:ug.timerStartedAt,timerDuration:ug.timerDuration});
-        const sock=this.getUserSocket(userId);
-        if(sock)sock.emit('balanceUpdated',{newBalance:user.walletBalance,cardNumber:card.cardNumber});
-        return {success:true,cardNumber:card.cardNumber,newBalance:user.walletBalance};
+   async registerCard(roomId, userId, cardId) {
+    console.log(`\n📝 [REGISTER] Starting registration - User: ${userId}, Card: ${cardId}`);
+    
+    // 1. Validate game
+    const game = await Game.getActiveGame(roomId);
+    if (!game || (game.status !== 'scheduled' && game.status !== 'waiting')) {
+        console.log(`❌ [REGISTER] Game not available. Status: ${game?.status}`);
+        throw new Error('Game not available');
     }
-
+    console.log(`✅ [REGISTER] Game found - #${game.gameNumber}, Status: ${game.status}`);
+    
+    // 2. Get config
+    const config = await GameConfig.findOne({ roomId });
+    if (!config) {
+        console.log(`❌ [REGISTER] Config not found for room: ${roomId}`);
+        throw new Error('Config not found');
+    }
+    console.log(`⚙️ [REGISTER] Config - Card Price: ${config.cardPrice}, Max Cards: ${config.maxCardsPerPlayer}`);
+    
+    // 3. Validate card
+    const card = await Card.findOne({ _id: cardId, gameId: game._id, userId, status: 'preview' });
+    if (!card) {
+        console.log(`❌ [REGISTER] Card not found or not in preview status`);
+        throw new Error('Card not found');
+    }
+    console.log(`🃏 [REGISTER] Card found - Price: ${card.price} ETB`);
+    
+    // 4. Check user balance
+    const user = await User.findById(userId);
+    if (!user) {
+        console.log(`❌ [REGISTER] User not found`);
+        throw new Error('User not found');
+    }
+    if (user.walletBalance < card.price) {
+        console.log(`❌ [REGISTER] Insufficient balance. Has: ${user.walletBalance}, Needs: ${card.price}`);
+        throw new Error(`Need ${card.price} ETB. You have ${user.walletBalance} ETB`);
+    }
+    console.log(`💰 [REGISTER] Balance check passed - Current: ${user.walletBalance} ETB`);
+    
+    // 5. BEFORE UPDATE - Log current state
+    console.log(`📊 [REGISTER] BEFORE UPDATE:`);
+    console.log(`   - totalCards: ${game.totalCards}`);
+    console.log(`   - prizePool: ${game.prizePool}`);
+    console.log(`   - players.length: ${game.players?.length || 0}`);
+    console.log(`   - timerStartedAt: ${game.timerStartedAt || 'not set'}`);
+    
+    // 6. Update game - increment totalCards and prizePool
+    const ug = await Game.findOneAndUpdate(
+        { 
+            _id: game._id, 
+            status: { $in: ['scheduled', 'waiting'] } 
+        },
+        { 
+            $inc: { 
+                totalCards: 1,           // ← INCREASE BY 1
+                prizePool: card.price    // ← INCREASE BY CARD PRICE
+            },
+            $set: { 
+                timerStartedAt: game.players.length === 0 ? new Date() : game.timerStartedAt,
+                status: game.players.length === 0 ? 'waiting' : game.status 
+            }
+        },
+        { new: true }  // Return updated document
+    );
+    
+    if (!ug) {
+        console.log(`❌ [REGISTER] Game update failed - game might have started already`);
+        throw new Error('Game update failed');
+    }
+    
+    // 7. AFTER UPDATE - Log new state
+    console.log(`📊 [REGISTER] AFTER UPDATE:`);
+    console.log(`   - totalCards: ${ug.totalCards} (was ${game.totalCards}, +1)`);
+    console.log(`   - prizePool: ${ug.prizePool} (was ${game.prizePool}, +${card.price})`);
+    console.log(`   - Calculation: ${ug.totalCards} cards × ${card.price} ETB = ${ug.totalCards * card.price} ETB`);
+    console.log(`   - players.length: ${ug.players?.length || 0}`);
+    
+    // 8. Update card status
+    card.status = 'registered';
+    card.cardNumber = ug.totalCards;  // ← Gets the new totalCards count
+    card.registeredAt = new Date();
+    await card.save();
+    console.log(`🃏 [REGISTER] Card updated - Status: registered, Card #${card.cardNumber}`);
+    
+    // 9. Add card to player's list
+    const pi = ug.players.findIndex(p => p.userId.toString() === userId);
+    if (pi === -1) {
+        ug.players.push({ userId, cards: [card._id] });
+        console.log(`👤 [REGISTER] New player added to game. Total players: ${ug.players.length}`);
+    } else {
+        ug.players[pi].cards.push(card._id);
+        console.log(`👤 [REGISTER] Existing player. Now has ${ug.players[pi].cards.length} cards`);
+    }
+    await ug.save();
+    
+    // 10. Deduct balance
+    const oldBalance = user.walletBalance;
+    user.walletBalance -= card.price;
+    await user.save();
+    console.log(`💰 [REGISTER] Balance deducted - ${oldBalance} → ${user.walletBalance} (-${card.price})`);
+    
+    // 11. Create transaction
+    await Transaction.create({
+        userId,
+        type: 'card_purchase',
+        amount: -card.price,
+        gameId: ug.gameId,
+        gameNumber: ug.gameNumber,
+        description: `Card #${card.cardNumber}`,
+        balanceAfter: user.walletBalance,
+        cardId: card._id
+    });
+    console.log(`📄 [REGISTER] Transaction created`);
+    
+    // 12. Start countdown if first player
+    if (ug.players.length === 1) {
+        console.log(`⏱️ [REGISTER] First player joined! Starting countdown...`);
+        this.startCountdown(roomId, ug, config);
+    }
+    
+    // 13. Emit events
+    console.log(`📡 [REGISTER] Emitting events:`);
+    console.log(`   - cardRegistered to room: totalCards=${ug.totalCards}, prizePool=${ug.prizePool}`);
+    console.log(`   - balanceUpdated to user: newBalance=${user.walletBalance}`);
+    
+    this.io.to(roomId).emit('cardRegistered', {
+        userId,
+        cardId: card._id,
+        cardNumber: card.cardNumber,
+        totalCards: ug.totalCards,      // ← Total registered cards
+        playerCount: ug.players.length,  // ← Number of players
+        prizePool: ug.prizePool,         // ← Total prize pool
+        timerStartedAt: ug.timerStartedAt,
+        timerDuration: ug.timerDuration
+    });
+    
+    const sock = this.getUserSocket(userId);
+    if (sock) {
+        sock.emit('balanceUpdated', { 
+            newBalance: user.walletBalance, 
+            cardNumber: card.cardNumber 
+        });
+    }
+    
+    console.log(`✅ [REGISTER] Complete! Card #${card.cardNumber} registered successfully\n`);
+    
+    return { 
+        success: true, 
+        cardNumber: card.cardNumber, 
+        newBalance: user.walletBalance 
+    };
+}
     async cancelPreviewCard(roomId, userId, cardId) {
         await Card.deleteOne({_id:cardId,userId,status:'preview'});
         const sock=this.getUserSocket(userId);
