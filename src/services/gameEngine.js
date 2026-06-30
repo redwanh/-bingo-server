@@ -428,17 +428,58 @@ if (activeCards === 0 && current.totalCards > 0) {
         idx++;
     }, config.drawIntervalSeconds * 1000, 'number_draw');
 }
-    checkWin(card, drawnNumbers) {
-        const drawnSet = new Set(drawnNumbers.map(d => d.number));
-        const cols = ['B', 'I', 'N', 'G', 'O'];
-        for (let r = 0; r < 5; r++) { let ok = true; for (let c of cols) { if (!(c === 'N' && r === 2) && !drawnSet.has(card.grid[c][r].number)) { ok = false; break; } } if (ok) return 'line'; }
-        for (let c of cols) { let ok = true; for (let r = 0; r < 5; r++) { if (!(c === 'N' && r === 2) && !drawnSet.has(card.grid[c][r].number)) { ok = false; break; } } if (ok) return 'line'; }
-        let d1 = true, d2 = true;
-        for (let i = 0; i < 5; i++) { if (!(cols[i] === 'N' && i === 2) && !drawnSet.has(card.grid[cols[i]][i].number)) d1 = false; if (!(cols[4-i] === 'N' && i === 2) && !drawnSet.has(card.grid[cols[4-i]][i].number)) d2 = false; }
-        if (d1 || d2) return 'line';
-        if (drawnSet.has(card.grid.B[0].number) && drawnSet.has(card.grid.O[0].number) && drawnSet.has(card.grid.B[4].number) && drawnSet.has(card.grid.O[4].number)) return 'four_corners';
-        return null;
+checkWin(card, drawnNumbers, config) {
+    const drawnSet = new Set(drawnNumbers.map(d => d.number));
+    const cols = ['B', 'I', 'N', 'G', 'O'];
+    
+    // 🔥 If isLastNumberCalledBingo is ON, check last number is on card
+    if (config?.isLastNumberCalledBingo && drawnNumbers.length > 0) {
+        const lastCalled = drawnNumbers[drawnNumbers.length - 1];
+        const lastCell = card.grid[lastCalled.letter]?.find(c => c.number === lastCalled.number);
+        
+        if (!lastCell) {
+            // Last called number NOT on this card - no BINGO possible
+            return null;
+        }
     }
+    
+    // Check rows
+    for (let r = 0; r < 5; r++) { 
+        let ok = true; 
+        for (let c of cols) { 
+            if (!(c === 'N' && r === 2) && !drawnSet.has(card.grid[c][r].number)) { 
+                ok = false; break; 
+            } 
+        } 
+        if (ok) return 'line'; 
+    }
+    
+    // Check columns
+    for (let c of cols) { 
+        let ok = true; 
+        for (let r = 0; r < 5; r++) { 
+            if (!(c === 'N' && r === 2) && !drawnSet.has(card.grid[c][r].number)) { 
+                ok = false; break; 
+            } 
+        } 
+        if (ok) return 'line'; 
+    }
+    
+    // Check diagonals
+    let d1 = true, d2 = true;
+    for (let i = 0; i < 5; i++) { 
+        if (!(cols[i] === 'N' && i === 2) && !drawnSet.has(card.grid[cols[i]][i].number)) d1 = false; 
+        if (!(cols[4-i] === 'N' && i === 2) && !drawnSet.has(card.grid[cols[4-i]][i].number)) d2 = false; 
+    }
+    if (d1 || d2) return 'line';
+    
+    // Four corners
+    if (drawnSet.has(card.grid.B[0].number) && drawnSet.has(card.grid.O[0].number) && 
+        drawnSet.has(card.grid.B[4].number) && drawnSet.has(card.grid.O[4].number)) 
+        return 'four_corners';
+    
+    return null;
+}
 
  async callBingo(roomId, userId, cardId) {
     const game = await Game.getActiveGame(roomId);
@@ -449,6 +490,29 @@ if (activeCards === 0 && current.totalCards > 0) {
     const card = await Card.findOne({ _id: cardId, userId, gameId: game._id, status: 'registered' });
     if (!card || card.isBlocked) throw new Error('Card not valid');
     if (card.bingoCalled) throw new Error('Bingo already called');
+    
+    // 🔥 CHECK LAST NUMBER FIRST - before any pattern check
+    const config = await GameConfig.findOne({ roomId });
+    const lastCalled = game.drawnNumbers?.[game.drawnNumbers.length - 1];
+    
+    if (config?.isLastNumberCalledBingo && lastCalled) {
+        const lastCell = card.grid[lastCalled.letter]?.find(c => c.number === lastCalled.number);
+        
+        if (!lastCell) {
+            card.isBlocked = true;
+            card.blockReason = 'Last number ' + lastCalled.letter + lastCalled.number + ' not on card';
+            await card.save();
+            
+            this.io.to(roomId).emit('falseBingo', {
+                userId,
+                cardId,
+                cardNumber: card.cardNumber,
+                reason: 'Last number ' + lastCalled.letter + lastCalled.number + ' not on card'
+            });
+            
+            return { success: false, falseBingo: true, reason: 'last_number_not_on_card' };
+        }
+    }
     
     const drawnSet = new Set(game.drawnNumbers.map(d => d.number));
     
@@ -469,7 +533,6 @@ if (activeCards === 0 && current.totalCards > 0) {
     let hasInvalidMark = false;
     
     if (winType === 'line') {
-        // Check rows
         for (let r = 0; r < 5; r++) {
             let rowWin = true;
             for (let c of cols) {
@@ -478,7 +541,6 @@ if (activeCards === 0 && current.totalCards > 0) {
                 }
             }
             if (rowWin) {
-                // This is the winning row — check its marks
                 for (let c of cols) {
                     if (c === 'N' && r === 2) continue;
                     const cell = card.grid[c][r];
@@ -490,7 +552,6 @@ if (activeCards === 0 && current.totalCards > 0) {
             }
         }
         
-        // Check columns (if row didn't win)
         if (!hasInvalidMark) {
             for (let c of cols) {
                 let colWin = true;

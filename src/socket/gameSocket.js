@@ -43,30 +43,31 @@ class GameSocket {
       // ROOM MANAGEMENT
       // ========================
       socket.on('joinRoom', async (roomId) => {
-        if (!roomId) return;
-        
-        // Leave all previous rooms first
-        const rooms = Array.from(socket.rooms);
-        rooms.forEach(room => {
-          if (room !== socket.id) {
-            socket.leave(room);
-            console.log(`🚪 ${socket.username} left room: ${room}`);
-          }
-        });
-        
-        // Join new room
-        socket.join(roomId);
-        console.log(`📍 ${socket.username} joined room: ${roomId}`);
-        
-        // Send game state for this room
-        try {
-          const state = await this.engine.getGameState(roomId, socket.userId);
-          socket.emit('gameState', state);
-        } catch (e) {
-          console.error('Error getting game state:', e);
-        }
-      });
-
+    if (!roomId) return;
+    
+    // Leave all previous rooms
+    const rooms = Array.from(socket.rooms);
+    rooms.forEach(room => {
+      if (room !== socket.id) {
+        socket.leave(room);
+        console.log(`🚪 ${socket.username} left room: ${room}`);
+      }
+    });
+    
+    // Join new room
+    socket.join(roomId);
+    console.log(`📍 ${socket.username} joined room: ${roomId}`);
+    
+    // 🔥 Only send game state for fast_bingo rooms
+    if (roomId === 'fast_bingo') {
+      try {
+        const state = await this.engine.getGameState(roomId, socket.userId);
+        socket.emit('gameState', state);
+      } catch (e) {
+        console.error('Error getting game state:', e);
+      }
+    }
+});
       socket.on('leaveRoom', (roomId) => {
         if (roomId) {
           socket.leave(roomId);
@@ -79,48 +80,9 @@ class GameSocket {
       // ========================
       
       // 🔥 MainBingo: Call Bingo
-      socket.on('mainBingoCallBingo', async (data) => {
-        try {
-          const { roomId, cardId } = data;
-          console.log(`🎯 BINGO called in room ${roomId} by ${socket.username}`);
-          const result = await this.engine.callBingo(socket.userId, cardId);
-          
-          // Emit result only to the specific room
-          if (result.success) {
-            this.io.to(roomId).emit('mainBingoBingoAccepted', result);
-            this.io.to(roomId).emit('mainBingoFirstBingo', result);
-          } else {
-            socket.emit('mainBingoBingoRejected', result);
-            if (result.reason === 'no_win' || result.reason === 'last_number_not_on_card') {
-              this.io.to(roomId).emit('mainBingoFalseBingo', {
-                userId: socket.userId,
-                cardId: cardId,
-                reason: result.reason
-              });
-            }
-          }
-        } catch (e) {
-          socket.emit('mainBingoBingoError', { message: e.message });
-        }
-      });
-
+     
       // 🔥 MainBingo: Mark Number
-      socket.on('markNumber', async (data) => {
-        try {
-          const { cardId, number, letter } = data;
-          const card = await Card.findOne({ _id: cardId, userId: socket.userId });
-          if (card && !card.isBlocked) {
-            const cell = card.grid[letter]?.find(c => c.number === number);
-            if (cell) {
-              cell.isMarked = !cell.isMarked;
-              await card.save();
-            }
-            socket.emit('numberMarked', { cardId, grid: card.grid });
-          }
-        } catch (e) {
-          console.error('markNumber error:', e);
-        }
-      });
+    
 
       // ========================
       // FAST BINGO EVENTS (room-specific)
