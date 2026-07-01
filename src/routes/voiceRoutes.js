@@ -33,51 +33,84 @@ router.post('/generate-tts/:number', protect, authorize('admin', 'superadmin'), 
 });
 
 // POST /generate-all — Generate TTS for ALL 75 numbers as base64 (one-time)
+
+
 router.post('/generate-all', protect, authorize('admin', 'superadmin'), async (req, res) => {
-  res.json({ success: true, message: 'Generating 75 voices as base64... this takes ~2 minutes' });
-  
-  const https = require('https');
+  res.json({ success: true, message: 'Generating 75 voices... takes ~2 minutes' });
   
   for (let i = 1; i <= 75; i++) {
+    const existing = await Voice.findOne({ number: i });
+    if (existing?.audioData && i <= 4) {
+      console.log(`⏭️ Skipping ${i} — already recorded`);
+      continue;
+    }
+    
     const letter = i <= 15 ? 'B' : i <= 30 ? 'I' : i <= 45 ? 'N' : i <= 60 ? 'G' : 'O';
     const text = `${letter} ${i}`;
-    const url = `https://translate.google.com/translate_tts?ie=UTF-8&client=tw-ob&tl=en&q=${encodeURIComponent(text)}`;
     
     try {
       const audioData = await new Promise((resolve, reject) => {
-        https.get(url, (response) => {
+        const options = {
+  hostname: 'translate.google.com',
+  path: `/translate_tts?ie=UTF-8&client=tw-ob&tl=am&q=${encodeURIComponent(text)}`,
+  headers: {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Accept': '*/*',
+    'Accept-Language': 'en-US,en;q=0.9',
+    'Referer': 'https://translate.google.com/',
+  }
+};
+        
+        https.get(options, (response) => {
           const chunks = [];
           response.on('data', chunk => chunks.push(chunk));
           response.on('end', () => {
             const buffer = Buffer.concat(chunks);
-            resolve('data:audio/mpeg;base64,' + buffer.toString('base64'));
+            if (buffer.length < 500) {
+              reject(new Error('Empty response — likely blocked'));
+            } else {
+              resolve('data:audio/mpeg;base64,' + buffer.toString('base64'));
+            }
           });
         }).on('error', reject);
       });
       
       await Voice.updateOne(
         { number: i },
-        { $set: { audioData, audioUrl: null } },  // Store as audioData, clear audioUrl
+        { $set: { audioData, audioUrl: null } },
         { upsert: true }
       );
       
-      console.log(`✅ Generated voice ${i}/75`);
+      console.log(`✅ Voice ${i}/75 — ${(audioData.length/1024).toFixed(0)}KB`);
     } catch (e) {
-      console.log(`❌ Failed voice ${i}:`, e.message);
+      console.log(`❌ Voice ${i} failed:`, e.message);
     }
     
-    // Delay to avoid rate limiting
-    await new Promise(r => setTimeout(r, 300));
+    await new Promise(r => setTimeout(r, 400));
   }
   
-  console.log('🎉 All 75 TTS voices saved to DB as base64!');
+  console.log('🎉 Done!');
 });
-
 // GET - Any logged-in user can fetch voices
 // GET - Auto-generate missing TTS as base64
 router.get('/', protect, async (req, res) => {
   const voices = await Voice.find().sort({ number: 1 });
   res.json({ success: true, voices });
+});
+
+router.get('/debug', async (req, res) => {
+  const start = parseInt(req.query.start) || 1;
+  const voices = await Voice.find({ 
+    number: { $gte: start },
+    audioData: { $exists: true, $ne: null } 
+  }).limit(5).sort({ number: 1 });
+  
+  const debug = voices.map(v => ({
+    number: v.number,
+    audioDataLength: v.audioData?.length || 0,
+    preview: v.audioData?.substring(0, 80),
+  }));
+  res.json(debug);
 });
 
 // PUT - Admin only
