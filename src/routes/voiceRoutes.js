@@ -4,6 +4,8 @@ const Voice = require('../models/Voice');
 const { protect, authorize } = require('../middleware/auth');
 const fs = require('fs');
 const path = require('path');
+const https = require('https');
+
 
 // POST /generate-tts/:number — Generate TTS for ONE number
 router.post('/generate-tts/:number', protect, authorize('admin', 'superadmin'), async (req, res) => {
@@ -71,9 +73,7 @@ router.post('/generate-all', protect, authorize('admin', 'superadmin'), async (r
 });
 
 // GET - Any logged-in user can fetch voices
-const https = require('https');
-const fs = require('fs');
-const path = require('path');
+
 
 // GET - Auto-generate missing TTS files
 router.get('/', protect, async (req, res) => {
