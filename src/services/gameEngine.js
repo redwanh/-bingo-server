@@ -569,6 +569,12 @@ if (sock) sock.emit('gameState', updatedState);
         }
         log(`🃏 Card: Price=${card.price} ETB`);
         
+        const registeredCount = await Card.countDocuments({ 
+  gameId: game._id, userId, status: 'registered' 
+});
+if (registeredCount >= config.maxCardsPerPlayer) {
+  throw new Error(`Max ${config.maxCardsPerPlayer} cards already registered`);
+}
         // 4. Check balance
         const user = await User.findById(userId);
         if (!user) {
