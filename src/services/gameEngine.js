@@ -503,7 +503,8 @@ class GameEngine {
         });
         
         return { success: true, card, newBalance: user.walletBalance, cardsOwned: cc + 1 };
-    }
+    } 
+     
 
     async previewCard(roomId, userId) {
         log(`\n👁️ [PREVIEW CARD] User: ${userId}, Room: ${roomId}`);
@@ -535,11 +536,56 @@ class GameEngine {
         const sock = this.getUserSocket(userId);
         if (sock) sock.emit('previewCardGenerated', { userId, card });
         // 🔥 Send updated game state immediately
-const updatedState = await this.getGameState(roomId, userId);
-if (sock) sock.emit('gameState', updatedState);
+
         
         return { success: true, card };
     }
+    async previewCards(roomId, userId, quantity) {
+  console.log('🔴 [BATCH PREVIEW] Called:', { roomId, userId, quantity });
+  
+  const game = await Game.getActiveGame(roomId);
+  if (!game || (game.status !== 'scheduled' && game.status !== 'waiting')) {
+    console.log('🔴 [BATCH PREVIEW] Game not available:', game?.status);
+    throw new Error('Game not available');
+  }
+  
+  const config = await GameConfig.findOne({ roomId });
+  const registeredCount = await Card.countDocuments({ gameId: game._id, userId, status: 'registered' });
+  const previewCount = await Card.countDocuments({ gameId: game._id, userId, status: 'preview' });
+  
+  console.log('🔴 [BATCH PREVIEW] Counts:', { registeredCount, previewCount, max: config.maxCardsPerPlayer });
+  
+  const available = config.maxCardsPerPlayer - registeredCount - previewCount;
+  const actualQty = Math.min(quantity, available);
+  console.log('🔴 [BATCH PREVIEW] Creating:', actualQty, 'cards');
+  
+  if (actualQty <= 0) throw new Error(`Max ${config.maxCardsPerPlayer} cards`);
+  
+ const cards = [];
+for (let i = 0; i < actualQty; i++) {
+  cards.push({
+    gameId: game._id, 
+    userId,
+    cardId: new (require('mongoose').Types.ObjectId)(), // 🔥 Add unique cardId
+    cardNumber: game.totalCards + i + 1,
+    grid: this.generateGrid(),
+    price: config.cardPrice,
+    status: 'preview'
+  });
+}
+  
+  const created = await Card.insertMany(cards);
+  console.log('🔴 [BATCH PREVIEW] Created:', created.length, 'cards');
+  
+  const sock = this.getUserSocket(userId);
+  if (sock) {
+    created.forEach(card => {
+      sock.emit('previewCardGenerated', { userId, card });
+    });
+  }
+  
+  return { success: true, count: created.length };
+}
 
     async registerCard(roomId, userId, cardId) {
         divider();

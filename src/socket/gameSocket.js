@@ -151,7 +151,16 @@ class GameSocket {
           this.markPastNumbers(socket.userId, socket);
         }
       });
-
+socket.on('previewCards', async (data) => {
+  console.log('🟡 [SOCKET] previewCards BATCH:', data);
+  try {
+    const result = await this.engine.previewCards(data.roomId, socket.userId, data.quantity);
+    console.log('🟡 [SOCKET] previewCards done:', result);
+  } catch (e) {
+    console.log('🟡 [SOCKET] previewCards error:', e.message);
+    socket.emit('error', { message: e.message });
+  }
+});
       // ========================
       // DISCONNECT
       // ========================
