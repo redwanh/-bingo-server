@@ -4,8 +4,6 @@ const Voice = require('../models/Voice');
 const { protect, authorize } = require('../middleware/auth');
 const fs = require('fs');
 const path = require('path');
-const https = require('https');
-
 
 // POST /generate-tts/:number — Generate TTS for ONE number
 router.post('/generate-tts/:number', protect, authorize('admin', 'superadmin'), async (req, res) => {
@@ -34,33 +32,36 @@ router.post('/generate-tts/:number', protect, authorize('admin', 'superadmin'), 
   });
 });
 
-// POST /generate-all — Generate TTS for ALL 75 numbers
+// POST /generate-all — Generate TTS for ALL 75 numbers as base64 (one-time)
 router.post('/generate-all', protect, authorize('admin', 'superadmin'), async (req, res) => {
-  res.json({ success: true, message: 'Generating 75 voices...' });
+  res.json({ success: true, message: 'Generating 75 voices as base64... this takes ~2 minutes' });
   
-  const voicesDir = path.join(__dirname, '..', 'public', 'voices');
-  fs.mkdirSync(voicesDir, { recursive: true });
-
+  const https = require('https');
+  
   for (let i = 1; i <= 75; i++) {
     const letter = i <= 15 ? 'B' : i <= 30 ? 'I' : i <= 45 ? 'N' : i <= 60 ? 'G' : 'O';
     const text = `${letter} ${i}`;
-    const filename = `voice_${i}.mp3`;
-    const filepath = path.join(voicesDir, filename);
     const url = `https://translate.google.com/translate_tts?ie=UTF-8&client=tw-ob&tl=en&q=${encodeURIComponent(text)}`;
     
     try {
-      await new Promise((resolve) => {
+      const audioData = await new Promise((resolve, reject) => {
         https.get(url, (response) => {
-          const file = fs.createWriteStream(filepath);
-          response.pipe(file);
-          file.on('finish', async () => {
-            file.close();
-            await Voice.updateOne({ number: i }, { $set: { audioUrl: `/voices/${filename}` } });
-            console.log(`✅ Generated voice ${i}/75`);
-            resolve();
+          const chunks = [];
+          response.on('data', chunk => chunks.push(chunk));
+          response.on('end', () => {
+            const buffer = Buffer.concat(chunks);
+            resolve('data:audio/mpeg;base64,' + buffer.toString('base64'));
           });
-        }).on('error', resolve);
+        }).on('error', reject);
       });
+      
+      await Voice.updateOne(
+        { number: i },
+        { $set: { audioData, audioUrl: null } },  // Store as audioData, clear audioUrl
+        { upsert: true }
+      );
+      
+      console.log(`✅ Generated voice ${i}/75`);
     } catch (e) {
       console.log(`❌ Failed voice ${i}:`, e.message);
     }
@@ -69,67 +70,13 @@ router.post('/generate-all', protect, authorize('admin', 'superadmin'), async (r
     await new Promise(r => setTimeout(r, 300));
   }
   
-  console.log('🎉 All 75 TTS voices generated!');
+  console.log('🎉 All 75 TTS voices saved to DB as base64!');
 });
 
 // GET - Any logged-in user can fetch voices
-
-
-// GET - Auto-generate missing TTS files
+// GET - Auto-generate missing TTS as base64
 router.get('/', protect, async (req, res) => {
-  let voices = await Voice.find().sort({ number: 1 });
-  
-  // Check for missing audioUrls and generate them
-  const voicesDir = path.join(__dirname, '..', 'public', 'voices');
-  fs.mkdirSync(voicesDir, { recursive: true });
-  
-  let generated = 0;
-  
-  for (const voice of voices) {
-    // Skip if already has audio
-    if (voice.audioData || voice.audioUrl) continue;
-    
-    const letter = voice.number <= 15 ? 'B' : voice.number <= 30 ? 'I' : voice.number <= 45 ? 'N' : voice.number <= 60 ? 'G' : 'O';
-    const text = `${letter} ${voice.number}`;
-    const filename = `voice_${voice.number}.mp3`;
-    const filepath = path.join(voicesDir, filename);
-    
-    // Skip if file already exists
-    if (fs.existsSync(filepath)) {
-      voice.audioUrl = `/voices/${filename}`;
-      await voice.save();
-      continue;
-    }
-    
-    // Generate TTS file
-    const url = `https://translate.google.com/translate_tts?ie=UTF-8&client=tw-ob&tl=en&q=${encodeURIComponent(text)}`;
-    
-    try {
-      await new Promise((resolve) => {
-        https.get(url, (response) => {
-          const file = fs.createWriteStream(filepath);
-          response.pipe(file);
-          file.on('finish', async () => {
-            file.close();
-            voice.audioUrl = `/voices/${filename}`;
-            await voice.save();
-            generated++;
-            resolve();
-          });
-        }).on('error', resolve);
-      });
-    } catch (e) {}
-    
-    // Small delay
-    await new Promise(r => setTimeout(r, 200));
-  }
-  
-  if (generated > 0) {
-    console.log(`✅ Auto-generated ${generated} missing TTS files`);
-  }
-  
-  // Re-fetch after updates
-  voices = await Voice.find().sort({ number: 1 });
+  const voices = await Voice.find().sort({ number: 1 });
   res.json({ success: true, voices });
 });
 
