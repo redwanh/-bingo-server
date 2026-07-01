@@ -534,6 +534,9 @@ class GameEngine {
         
         const sock = this.getUserSocket(userId);
         if (sock) sock.emit('previewCardGenerated', { userId, card });
+        // 🔥 Send updated game state immediately
+const updatedState = await this.getGameState(roomId, userId);
+if (sock) sock.emit('gameState', updatedState);
         
         return { success: true, card };
     }
