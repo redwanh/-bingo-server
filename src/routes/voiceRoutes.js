@@ -71,8 +71,65 @@ router.post('/generate-all', protect, authorize('admin', 'superadmin'), async (r
 });
 
 // GET - Any logged-in user can fetch voices
-router.get('/', protect, async (req, res) => {          // ← NO authorize here!
-  const voices = await Voice.find().sort({ number: 1 });
+const https = require('https');
+const fs = require('fs');
+const path = require('path');
+
+// GET - Auto-generate missing TTS files
+router.get('/', protect, async (req, res) => {
+  let voices = await Voice.find().sort({ number: 1 });
+  
+  // Check for missing audioUrls and generate them
+  const voicesDir = path.join(__dirname, '..', 'public', 'voices');
+  fs.mkdirSync(voicesDir, { recursive: true });
+  
+  let generated = 0;
+  
+  for (const voice of voices) {
+    // Skip if already has audio
+    if (voice.audioData || voice.audioUrl) continue;
+    
+    const letter = voice.number <= 15 ? 'B' : voice.number <= 30 ? 'I' : voice.number <= 45 ? 'N' : voice.number <= 60 ? 'G' : 'O';
+    const text = `${letter} ${voice.number}`;
+    const filename = `voice_${voice.number}.mp3`;
+    const filepath = path.join(voicesDir, filename);
+    
+    // Skip if file already exists
+    if (fs.existsSync(filepath)) {
+      voice.audioUrl = `/voices/${filename}`;
+      await voice.save();
+      continue;
+    }
+    
+    // Generate TTS file
+    const url = `https://translate.google.com/translate_tts?ie=UTF-8&client=tw-ob&tl=en&q=${encodeURIComponent(text)}`;
+    
+    try {
+      await new Promise((resolve) => {
+        https.get(url, (response) => {
+          const file = fs.createWriteStream(filepath);
+          response.pipe(file);
+          file.on('finish', async () => {
+            file.close();
+            voice.audioUrl = `/voices/${filename}`;
+            await voice.save();
+            generated++;
+            resolve();
+          });
+        }).on('error', resolve);
+      });
+    } catch (e) {}
+    
+    // Small delay
+    await new Promise(r => setTimeout(r, 200));
+  }
+  
+  if (generated > 0) {
+    console.log(`✅ Auto-generated ${generated} missing TTS files`);
+  }
+  
+  // Re-fetch after updates
+  voices = await Voice.find().sort({ number: 1 });
   res.json({ success: true, voices });
 });
 
