@@ -1260,14 +1260,21 @@ async verifyAndFixGame(roomId) {
         game.status = 'completed'; 
         game.endTime = new Date(); 
         await game.save();
-        await Card.updateMany(
+     await Card.updateMany(
   { gameId: game._id },
   { $set: { status: 'available', userId: null, gameId: null, isBlocked: false, bingoCalled: false } }
-);
-        await Card.updateMany(
-  { gameId: game._id, status: 'registered' },
-  { $set: { status: 'available', userId: null, gameId: null } }
-);
+);const allCards = await Card.find({ gameId: game._id });
+for (const c of allCards) {
+  ['B', 'I', 'N', 'G', 'O'].forEach(col => {
+    if (c.grid[col]) {
+      c.grid[col] = c.grid[col].map(cell => ({
+        ...cell,
+        isMarked: cell.number === 0 ? true : false,
+      }));
+    }
+  });
+  await c.save();
+}
         
         timerManager.clearInterval(`draw_${roomId}`); 
         timerManager.clearTimeout(`grace_${roomId}`);
@@ -1312,6 +1319,10 @@ async verifyAndFixGame(roomId) {
         game.endTime = new Date();
         game.endReason = game.endReason || 'all_numbers_drawn';
         await game.save();
+        await Card.updateMany(
+  { gameId: game._id },
+  { $set: { status: 'available', userId: null, gameId: null, isBlocked: false, bingoCalled: false } }
+);
         
         timerManager.clearInterval(`draw_${roomId}`);
         
