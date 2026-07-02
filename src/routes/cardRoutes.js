@@ -17,6 +17,22 @@ router.get('/available', protect, async (req, res) => {
   }
 });
 
+// GET /pool — Get all 400 seeded cards with status for the grid
+router.get('/pool', protect, async (req, res) => {
+  try {
+    const cards = await Card.find({ 
+      status: { $in: ['preview', 'sold', 'registered', 'available'] } 
+    })
+    .select('displayId cardNumber status userId grid price _id')
+    .sort({ displayId: 1 })
+    .limit(400);
+    
+    res.json({ success: true, cards });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
 // Get single card by ID
 router.get('/:cardId', protect, async (req, res) => {
   try {

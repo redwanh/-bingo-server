@@ -208,6 +208,38 @@ router.get('/history/:roomId', protect, async (req, res) => {
 });
 
 // ============================================
+// BUY SPECIFIC CARD (New 400-card grid flow)
+// ============================================
+router.post('/:roomId/buy-card', protect, async (req, res) => {
+    try {
+        const { cardId } = req.body;
+        const { roomId } = req.params;
+        
+        if (!cardId) {
+            return res.status(400).json({ success: false, error: 'cardId is required' });
+        }
+        
+        const engine = req.app.get('gameEngine');
+        
+        // Find the pre-generated card
+        const card = await Card.findById(cardId);
+        if (!card) {
+            return res.status(404).json({ success: false, error: 'Card not found' });
+        }
+        
+        if (card.userId || card.status === 'sold' || card.status === 'registered') {
+            return res.status(400).json({ success: false, error: 'Card already sold' });
+        }
+        
+        // Register it like a normal card
+        const result = await engine.registerCard(roomId, req.user.id, cardId);
+        res.json(result);
+        
+    } catch (e) {
+        res.status(400).json({ success: false, error: e.message });
+    }
+});
+// ============================================
 // TRANSACTIONS
 // ============================================
 

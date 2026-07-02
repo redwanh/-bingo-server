@@ -188,10 +188,7 @@ class GameEngine {
             balanceAfter: user.walletBalance, cardId: card._id 
         });
         
-        card.status = 'refunded'; 
-        card.refundedAt = new Date(); 
-        card.refundReason = reason; 
-        await card.save();
+        
         
         await this.sendRefundNotification(user._id, amt, game.gameNumber, reason);
         
@@ -608,7 +605,13 @@ for (let i = 0; i < actualQty; i++) {
         log(`⚙️ Config: Card Price=${config.cardPrice}, Max Cards=${config.maxCardsPerPlayer}, Commission=${config.commissionPercentage || 10}%`);
         
         // 3. Validate card
-        const card = await Card.findOne({ _id: cardId, gameId: game._id, userId, status: 'preview' });
+        const card = await Card.findOne({ 
+    _id: cardId, 
+    $or: [
+        { gameId: game._id, userId, status: 'preview' },
+        { _id: cardId, userId: null, status: { $in: ['available', 'preview'] } }
+    ]
+});
         if (!card) {
             logError(`❌ Card not found or not preview`);
             throw new Error('Card not found');
@@ -686,11 +689,12 @@ if (registeredCount >= config.maxCardsPerPlayer) {
         }
         
         // 8. Update card
-        card.status = 'registered';
-        card.cardNumber = ug.totalCards;
-        card.registeredAt = new Date();
-        await card.save();
-        log(`🃏 Card #${card.cardNumber} registered`);
+        card.userId = userId;          // ← ADD
+card.gameId = ug._id;           // ← ADD (or game._id)
+card.status = 'registered';
+card.cardNumber = ug.totalCards;
+card.registeredAt = new Date();
+await card.save();
         
         // 9. Add to players
         const pi = ug.players.findIndex(p => p.userId.toString() === userId);
@@ -1250,6 +1254,10 @@ async verifyAndFixGame(roomId) {
         game.status = 'completed'; 
         game.endTime = new Date(); 
         await game.save();
+        await Card.updateMany(
+  { gameId: game._id, status: 'registered' },
+  { $set: { status: 'available', userId: null, gameId: null } }
+);
         
         timerManager.clearInterval(`draw_${roomId}`); 
         timerManager.clearTimeout(`grace_${roomId}`);
@@ -1360,6 +1368,9 @@ async verifyAndFixGame(roomId) {
             }
         }, 5000);
     }
+
+    
+    
 
     async getGameState(roomId, userId) {
         const game = await Game.getActiveGame(roomId); 

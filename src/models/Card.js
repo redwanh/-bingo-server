@@ -7,7 +7,7 @@ const cardSchema = new mongoose.Schema({
   gameId: { type: mongoose.Schema.Types.ObjectId, ref: 'Game' },
   userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
   cardNumber: Number,
-  status: { type: String, enum: ['preview', 'registered', 'active','refunded', 'blocked', 'completed'], default: 'preview' },
+  status: { type: String, enum: ['preview', 'registered','available', 'active','refunded', 'blocked', 'completed'], default: 'preview' },
   grid: {
     B: [{ number: Number, isMarked: { type: Boolean, default: false } }],
     I: [{ number: Number, isMarked: { type: Boolean, default: false } }],
