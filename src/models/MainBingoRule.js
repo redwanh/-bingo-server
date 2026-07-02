@@ -7,6 +7,8 @@ const sampleSchema = new mongoose.Schema({
     rowsFound: Number,
     colsFound: Number,
     diagsFound: Number,
+    squaresFound: Number,
+    rectanglesFound: Number,
     totalLines: Number,
     totalMarked: Number,
     cornersOk: Boolean,
@@ -23,14 +25,14 @@ const mainBingoRuleSchema = new mongoose.Schema({
   description: { type: String, default: '' },
   method: { type: String, enum: ['rule', 'pattern'], required: true },
   
-  // 🔧 Multi-language names
+  // Multi-language names
   nameAmharic: { type: String, default: '' },
   nameTigrinya: { type: String, default: '' },
   nameOromo: { type: String, default: '' },
   nameChinese: { type: String, default: '' },
   nameEnglish: { type: String, default: '' },
   
-  // 🔧 Multi-language descriptions
+  // Multi-language descriptions
   descriptionAmharic: { type: String, default: '' },
   descriptionTigrinya: { type: String, default: '' },
   descriptionOromo: { type: String, default: '' },
@@ -43,6 +45,22 @@ const mainBingoRuleSchema = new mongoose.Schema({
     minRows: { type: Number, default: 0 },
     minColumns: { type: Number, default: 0 },
     minDiagonals: { type: Number, default: 0 },
+
+    // SQUARE COUNTS
+    minSquares: { type: Number, default: 0 },
+    exactSquares: { type: Number, default: null },
+    maxSquares: { type: Number, default: null },
+    squareMinSize: { type: Number, default: 2 },
+    squareMaxSize: { type: Number, default: 5 },
+    
+    // RECTANGLE COUNTS
+    minRectangles: { type: Number, default: 0 },
+    exactRectangles: { type: Number, default: null },
+    maxRectangles: { type: Number, default: null },
+    rectMinWidth: { type: Number, default: 2 },
+    rectMaxWidth: { type: Number, default: 5 },
+    rectMinHeight: { type: Number, default: 2 },
+    rectMaxHeight: { type: Number, default: 5 },
     
     // EXACT COUNTS
     exactRows: { type: Number, default: null },
@@ -56,7 +74,9 @@ const mainBingoRuleSchema = new mongoose.Schema({
     requiredCombination: {
       rows: { type: Number, default: null },
       columns: { type: Number, default: null },
-      diagonals: { type: Number, default: null }
+      diagonals: { type: Number, default: null },
+      squares: { type: Number, default: null },
+      rectangles: { type: Number, default: null }
     },
     mustHaveAllTypes: { type: Boolean, default: false },
     exclusiveLines: { type: String, default: null },
@@ -84,9 +104,9 @@ const mainBingoRuleSchema = new mongoose.Schema({
     sharedCellsLimit: { type: Number, default: null },
     
     // DIRECTION
-    lineDirections: [{ type: String, enum: ['horizontal', 'vertical', 'diagonal'] }],
-    requiredDirections: [{ type: String }],
-    prohibitedDirections: [{ type: String }],
+    lineDirections: [{ type: String, enum: ['horizontal', 'vertical', 'diagonal', 'square', 'rectangle'] }],
+    requiredDirections: [{ type: String, enum: ['horizontal', 'vertical', 'diagonal', 'square', 'rectangle'] }],
+    prohibitedDirections: [{ type: String, enum: ['horizontal', 'vertical', 'diagonal', 'square', 'rectangle'] }],
     
     // SPECIAL
     cornersRequired: { type: Boolean, default: false },
