@@ -1027,9 +1027,56 @@ async verifyAndFixGame(roomId) {
                 number: num, letter, drawCount: idx + 1, 
                 totalNumbers: current.allNumbers.length 
             });
+                        this.io.to(roomId).emit('numberDrawn', { 
+                number: num, letter, drawCount: idx + 1, 
+                totalNumbers: current.allNumbers.length 
+            });
+            
+            // 🔥 AUTO BINGO CHECK
+            if (config?.autoBingoEnabled) {
+                const allRegisteredCards = await Card.find({ 
+                    gameId: current._id, 
+                    status: 'registered',
+                    isBlocked: false,
+                    bingoCalled: false 
+                });
+                
+                for (const card of allRegisteredCards) {
+                    const winType = this.checkWin(card, current.drawnNumbers, config);
+                    if (winType) {
+                        card.bingoCalled = true;
+                        card.bingoCallTime = new Date();
+                        card.winType = winType;
+                        await card.save();
+                        
+                        if (current.status === 'in_progress') {
+                            timerManager.clearInterval(`draw_${roomId}`);
+                            current.status = 'bingo_called';
+                            current.gracePeriodEndTime = new Date(Date.now() + (config.gracePeriodSeconds || 10) * 1000);
+                            await current.save();
+                            this.io.to(roomId).emit('firstBingo', { 
+                                userId: card.userId, cardId: card._id, 
+                                cardNumber: card.cardNumber, winType, autoBingo: true 
+                            });
+                            timerManager.createTimeout(`grace_${roomId}`, 
+                                () => this.endGracePeriod(roomId, current._id), 
+                                (config.gracePeriodSeconds || 10) * 1000, 'grace_period');
+                            return;
+                        } else {
+                            this.io.to(roomId).emit('additionalBingo', { 
+                                userId: card.userId, cardId: card._id, 
+                                cardNumber: card.cardNumber, winType, autoBingo: true 
+                            });
+                        }
+                    }
+                }
+            }
+            
+            
             idx++;
         }, config.drawIntervalSeconds * 1000, 'number_draw');
     }
+    
 
     // ============================================
     // WIN CHECKING
@@ -1173,214 +1220,254 @@ async verifyAndFixGame(roomId) {
     // ============================================
     // GRACE PERIOD & END GAME
     // ============================================
-    async endGracePeriod(roomId, gameId) {
-        divider();
-        log(`\n⏰ [GRACE PERIOD END] Game: ${gameId}, Room: ${roomId}`);
-        
-        const game = await Game.findById(gameId);
-        if (!game || game.status === 'completed') {
-            log(`   Game already completed`);
-            return;
+ async endGame(roomId, game) {
+    divider();
+    log(`\n🏁 [END GAME] Game #${game.gameNumber} - No winner`);
+    log(`   Prize pool: ${game.prizePool} ETB`);
+    
+    game.status = 'completed';
+    game.endTime = new Date();
+    game.endReason = game.endReason || 'all_numbers_drawn';
+    await game.save();
+    console.log('✅ Game saved as completed');
+    
+    // 🔥 Reset ALL 400 seeded cards (displayId 10001-10400)
+    const resetResult = await Card.updateMany(
+      { displayId: { $gte: 10001, $lte: 10400 } },
+      { $set: { status: 'available', userId: null, gameId: null, isBlocked: false, bingoCalled: false } }
+    );
+    console.log(`🃏 Card reset: ${resetResult.modifiedCount} cards set to available`);
+    
+    // Reset grid marks for all 400 cards
+    const allCards = await Card.find({ displayId: { $gte: 10001, $lte: 10400 } });
+    console.log(`🃏 Found ${allCards.length} cards to reset grid marks`);
+    
+    for (const c of allCards) {
+      ['B', 'I', 'N', 'G', 'O'].forEach(col => {
+        if (c.grid[col]) {
+          c.grid[col] = c.grid[col].map(cell => ({
+            ...cell,
+            isMarked: cell.number === 0 ? true : false,
+          }));
         }
+      });
+      await c.save();
+    }
+    console.log('✅ Grid marks reset complete');
+    
+    timerManager.clearInterval(`draw_${roomId}`);
+    console.log('🧹 Draw timer cleared');
+    
+    const cards = await Card.find({ gameId: game._id, status: 'registered' });
+    console.log(`💰 Found ${cards.length} cards to refund`);
+    let totalRefunded = 0;
+    
+    log(`   Refunding ${cards.length} cards...`);
+    
+    for (const card of cards) {
+        const user = await User.findById(card.userId);
+        if (user) {
+            const oldBalance = user.walletBalance;
+            user.walletBalance += card.price;
+            await user.save();
+            totalRefunded += card.price;
+            
+            log(`   💰 ${user.fullName}: ${oldBalance} → ${user.walletBalance} (+${card.price})`);
+            
+            await Transaction.create({
+                userId: user._id,
+                type: 'refund',
+                amount: card.price,
+                gameId: game.gameId,
+                gameNumber: game.gameNumber,
+                description: `Refund - no winner in Game #${game.gameNumber}`,
+                balanceAfter: user.walletBalance
+            });
+            await this.sendRefundNotification(user._id, card.price, game.gameNumber, 'No winner - refunded');
+        }
+    }
+    
+    log(`\n💰 Total refunded: ${totalRefunded} ETB to ${cards.length} cards`);
+    
+    this.io.to(roomId).emit('gameEnded', { 
+        gameId: game._id, 
+        winners: [], 
+        prizePool: game.prizePool,
+        reason: 'No winner - all refunded',
+        refunded: true,
+        totalRefunded,
+        balance: totalRefunded > 0 ? undefined : 0
+    });
+    
+    divider();
+    
+    setTimeout(async () => {
+        const conf = await GameConfig.findOne({ roomId: game.roomId });
+        if (conf) {
+            const ln = await Game.getLatestGameNumber(game.roomId);
+            const ng = await Game.create({
+                gameId: String(ln + 1).padStart(10, '0'),
+                gameNumber: ln + 1,
+                roomId: game.roomId,
+                status: 'scheduled',
+                allNumbers: this.shuffleNumbers(),
+                timerDuration: conf.waitTimeSeconds
+            });
+            this.games.set(game.roomId, ng);
+            this.io.to(game.roomId).emit('newGameCreated', { 
+                gameId: ng.gameId, 
+                gameNumber: ng.gameNumber 
+            });
+            log(`🆕 New game #${ng.gameNumber} created`);
+        }
+    }, 5000);
+}
+
+async endGracePeriod(roomId, gameId) {
+    divider();
+    log(`\n⏰ [GRACE PERIOD END] Game: ${gameId}, Room: ${roomId}`);
+    
+    const game = await Game.findById(gameId);
+    if (!game || game.status === 'completed') {
+        log(`   Game already completed`);
+        return;
+    }
+    
+    const config = await GameConfig.findOne({ roomId: game.roomId });
+    const calledCards = await Card.find({ 
+        gameId: game._id, bingoCalled: true, isBlocked: false 
+    }).populate('userId');
+    
+    log(`   Called cards: ${calledCards.length}`);
+    log(`   Prize pool: ${game.prizePool} ETB`);
+    log(`   Commission: ${config?.commissionPercentage || 10}%`);
+    
+    const winners = [];
+    for (const card of calledCards) { 
+        const wt = this.checkWin(card, game.drawnNumbers); 
+        if (wt) { 
+            card.bingoValidated = true; 
+            await card.save(); 
+            winners.push({ card, winType: wt }); 
+        }
+    }
+    
+    log(`   Validated winners: ${winners.length}`);
+    
+    if (winners.length > 0) { 
+        const commissionRate = config?.commissionPercentage || 10;
+        const comm = (game.prizePool * commissionRate) / 100;
+        const ppw = (game.prizePool - comm) / winners.length;
         
-        const config = await GameConfig.findOne({ roomId: game.roomId });
-        const calledCards = await Card.find({ 
-            gameId: game._id, bingoCalled: true, isBlocked: false 
-        }).populate('userId');
-        
-        log(`   Called cards: ${calledCards.length}`);
+        log(`\n💰 PRIZE CALCULATION:`);
         log(`   Prize pool: ${game.prizePool} ETB`);
-        log(`   Commission: ${config?.commissionPercentage || 10}%`);
+        log(`   Commission (${commissionRate}%): ${comm} ETB`);
+        log(`   Prize per winner: ${ppw} ETB`);
+        log(`   Total payout: ${ppw * winners.length} ETB`);
         
-        const winners = [];
-        for (const card of calledCards) { 
-            const wt = this.checkWin(card, game.drawnNumbers); 
-            if (wt) { 
-                card.bingoValidated = true; 
-                await card.save(); 
-                winners.push({ card, winType: wt }); 
-            }
-        }
-        
-        log(`   Validated winners: ${winners.length}`);
-        
-        if (winners.length > 0) { 
-            const commissionRate = config?.commissionPercentage || 10;
-            const comm = (game.prizePool * commissionRate) / 100;
-            const ppw = (game.prizePool - comm) / winners.length;
+        for (const { card, winType } of winners) { 
+            const user = card.userId;
+            const oldBalance = user.walletBalance || 0;
+            await User.findByIdAndUpdate(user._id, { $inc: { walletBalance: ppw } });
+            const updatedUser = await User.findById(user._id);
             
-            log(`\n💰 PRIZE CALCULATION:`);
-            log(`   Prize pool: ${game.prizePool} ETB`);
-            log(`   Commission (${commissionRate}%): ${comm} ETB`);
-            log(`   Prize per winner: ${ppw} ETB`);
-            log(`   Total payout: ${ppw * winners.length} ETB`);
-            
-            for (const { card, winType } of winners) { 
-                const user = card.userId;
-                const oldBalance = user.walletBalance || 0;
-                await User.findByIdAndUpdate(user._id, { $inc: { walletBalance: ppw } });
-                const updatedUser = await User.findById(user._id);
-                
-                log(`   🏆 Winner: ${user.fullName} - ${oldBalance} → ${updatedUser.walletBalance} (+${ppw} ETB) - ${winType}`);
-                
-                await Transaction.create({ 
-                    userId: user._id, type: 'prize_win', amount: ppw, 
-                    gameId: game.gameId, gameNumber: game.gameNumber, 
-                    description: `Won with ${winType}`, 
-                    balanceAfter: updatedUser.walletBalance 
-                });
-                
-                game.winners.push({
-                    userId: user._id,
-                    cardId: card._id,
-                    winType,
-                    prizeAmount: ppw,
-                    winnerName: user.fullName,
-                    winnerPhone: user.phone,
-                    cardNumber: card.cardNumber,
-                    cardGrid: card.grid,
-                    newBalance: updatedUser.walletBalance  // 🔥 ADD THIS
-                });
-                
-                await this.sendWinningNotification(user._id, ppw, game.gameNumber, winType);
-            }
+            log(`   🏆 Winner: ${user.fullName} - ${oldBalance} → ${updatedUser.walletBalance} (+${ppw} ETB) - ${winType}`);
             
             await Transaction.create({ 
-                type: 'commission', amount: comm, 
+                userId: user._id, type: 'prize_win', amount: ppw, 
                 gameId: game.gameId, gameNumber: game.gameNumber, 
-                description: 'Commission' 
-            }); 
-            game.commission = comm;
+                description: `Won with ${winType}`, 
+                balanceAfter: updatedUser.walletBalance 
+            });
             
-            log(`\n📡 Emitting gameEnded with winners and balances`);
-        } else {
-            log(`   No valid winners found`);
+            game.winners.push({
+                userId: user._id,
+                cardId: card._id,
+                winType,
+                prizeAmount: ppw,
+                winnerName: user.fullName,
+                winnerPhone: user.phone,
+                cardNumber: card.cardNumber,
+                cardGrid: card.grid,
+                newBalance: updatedUser.walletBalance
+            });
+            
+            await this.sendWinningNotification(user._id, ppw, game.gameNumber, winType);
         }
         
-        game.status = 'completed'; 
-        game.endTime = new Date(); 
-        await game.save();
-        await Card.updateMany(
-  { gameId: game._id },
-  { $set: { status: 'available', userId: null, gameId: null, isBlocked: false, bingoCalled: false } }
-);
-        await Card.updateMany(
-  { gameId: game._id, status: 'registered' },
-  { $set: { status: 'available', userId: null, gameId: null } }
-);
+        await Transaction.create({ 
+            type: 'commission', amount: comm, 
+            gameId: game.gameId, gameNumber: game.gameNumber, 
+            description: 'Commission' 
+        }); 
+        game.commission = comm;
         
-        timerManager.clearInterval(`draw_${roomId}`); 
-        timerManager.clearTimeout(`grace_${roomId}`);
-        
-        this.io.to(roomId).emit('gameEnded', { 
-            gameId: game._id, 
-            winners: game.winners, 
-            prizePool: game.prizePool, 
-            commission: game.commission,
-            // 🔥 Send first winner's balance (client can use this)
-            balance: game.winners[0]?.newBalance || 0
-        });
-        
-        log(`✅ Game #${game.gameNumber} completed`);
-        divider();
-        
-        setTimeout(async () => { 
-            const conf = await GameConfig.findOne({ roomId: game.roomId }); 
-            if (conf) { 
-                const ln = await Game.getLatestGameNumber(roomId); 
-                const ng = await Game.create({ 
-                    gameId: String(ln + 1).padStart(10, '0'), 
-                    gameNumber: ln + 1, roomId, status: 'scheduled', 
-                    allNumbers: this.shuffleNumbers(), 
-                    timerDuration: conf.waitTimeSeconds 
-                }); 
-                this.games.set(roomId, ng); 
-                this.io.to(roomId).emit('newGameCreated', { 
-                    gameId: ng.gameId, gameNumber: ng.gameNumber 
-                }); 
-                log(`🆕 New game #${ng.gameNumber} created`);
-            } 
-        }, 5000);
+        log(`\n📡 Emitting gameEnded with winners and balances`);
+    } else {
+        log(`   No valid winners found`);
     }
-
-    async endGame(roomId, game) {
-        divider();
-        log(`\n🏁 [END GAME] Game #${game.gameNumber} - No winner`);
-        log(`   Prize pool: ${game.prizePool} ETB`);
-        
-        game.status = 'completed';
-        game.endTime = new Date();
-        game.endReason = game.endReason || 'all_numbers_drawn';
-        await game.save();
-        
-        timerManager.clearInterval(`draw_${roomId}`);
-        
-        const cards = await Card.find({ gameId: game._id, status: 'registered' });
-        let totalRefunded = 0;
-        
-        log(`   Refunding ${cards.length} cards...`);
-        
-        for (const card of cards) {
-            const user = await User.findById(card.userId);
-            if (user) {
-                const oldBalance = user.walletBalance;
-                user.walletBalance += card.price;
-                await user.save();
-                totalRefunded += card.price;
-                
-                log(`   💰 ${user.fullName}: ${oldBalance} → ${user.walletBalance} (+${card.price})`);
-                
-                await Transaction.create({
-                    userId: user._id,
-                    type: 'refund',
-                    amount: card.price,
-                    gameId: game.gameId,
-                    gameNumber: game.gameNumber,
-                    description: `Refund - no winner in Game #${game.gameNumber}`,
-                    balanceAfter: user.walletBalance
-                });
-                await this.sendRefundNotification(user._id, card.price, game.gameNumber, 'No winner - refunded');
-            }
+    
+    game.status = 'completed'; 
+    game.endTime = new Date(); 
+    await game.save();
+    console.log('✅ Game saved as completed (grace period)');
+    
+    // 🔥 Reset ALL 400 seeded cards (displayId 10001-10400)
+    const resetResult = await Card.updateMany(
+      { displayId: { $gte: 10001, $lte: 10400 } },
+      { $set: { status: 'available', userId: null, gameId: null, isBlocked: false, bingoCalled: false } }
+    );
+    console.log(`🃏 Card reset: ${resetResult.modifiedCount} cards set to available`);
+    
+    // Reset grid marks for all 400 cards
+    const allCards = await Card.find({ displayId: { $gte: 10001, $lte: 10400 } });
+    console.log(`🃏 Found ${allCards.length} cards to reset grid marks`);
+    
+    for (const c of allCards) {
+      ['B', 'I', 'N', 'G', 'O'].forEach(col => {
+        if (c.grid[col]) {
+          c.grid[col] = c.grid[col].map(cell => ({
+            ...cell,
+            isMarked: cell.number === 0 ? true : false,
+          }));
         }
-        
-        log(`\n💰 Total refunded: ${totalRefunded} ETB to ${cards.length} cards`);
-        
-        this.io.to(roomId).emit('gameEnded', { 
-            gameId: game._id, 
-            winners: [], 
-            prizePool: game.prizePool,
-            reason: 'No winner - all refunded',
-            refunded: true,
-            totalRefunded,
-            balance: totalRefunded > 0 ? undefined : 0 // Balance unchanged on refund
-        });
-        
-        divider();
-        
-        setTimeout(async () => {
-            const conf = await GameConfig.findOne({ roomId: game.roomId });
-            if (conf) {
-                const ln = await Game.getLatestGameNumber(game.roomId);
-                const ng = await Game.create({
-                    gameId: String(ln + 1).padStart(10, '0'),
-                    gameNumber: ln + 1,
-                    roomId: game.roomId,
-                    status: 'scheduled',
-                    allNumbers: this.shuffleNumbers(),
-                    timerDuration: conf.waitTimeSeconds
-                });
-                this.games.set(game.roomId, ng);
-                this.io.to(game.roomId).emit('newGameCreated', { 
-                    gameId: ng.gameId, 
-                    gameNumber: ng.gameNumber 
-                });
-                log(`🆕 New game #${ng.gameNumber} created`);
-            }
-        }, 5000);
+      });
+      await c.save();
     }
-
+    console.log('✅ Grid marks reset complete');
     
+    timerManager.clearInterval(`draw_${roomId}`); 
+    timerManager.clearTimeout(`grace_${roomId}`);
     
+    this.io.to(roomId).emit('gameEnded', { 
+        gameId: game._id, 
+        winners: game.winners, 
+        prizePool: game.prizePool, 
+        commission: game.commission,
+        balance: game.winners[0]?.newBalance || 0
+    });
+    
+    log(`✅ Game #${game.gameNumber} completed`);
+    divider();
+    
+    setTimeout(async () => { 
+        const conf = await GameConfig.findOne({ roomId: game.roomId }); 
+        if (conf) { 
+            const ln = await Game.getLatestGameNumber(roomId); 
+            const ng = await Game.create({ 
+                gameId: String(ln + 1).padStart(10, '0'), 
+                gameNumber: ln + 1, roomId, status: 'scheduled', 
+                allNumbers: this.shuffleNumbers(), 
+                timerDuration: conf.waitTimeSeconds 
+            }); 
+            this.games.set(roomId, ng); 
+            this.io.to(roomId).emit('newGameCreated', { 
+                gameId: ng.gameId, gameNumber: ng.gameNumber 
+            }); 
+            log(`🆕 New game #${ng.gameNumber} created`);
+        } 
+    }, 5000);
+}
 
     async getGameState(roomId, userId) {
         const game = await Game.getActiveGame(roomId); 

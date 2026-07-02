@@ -15,6 +15,7 @@ const gameConfigSchema = new mongoose.Schema({
   autoMarkDefault: { type: Boolean, default: false },
   isActive: { type: Boolean, default: true },
   isLastNumberCalledBingo: { type: Boolean, default: false },
+  autoBingoEnabled: { type: Boolean, default: false },
 }, { timestamps: true });
 
 module.exports = mongoose.model('GameConfig', gameConfigSchema);
