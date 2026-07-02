@@ -23,6 +23,20 @@ const mainBingoRuleSchema = new mongoose.Schema({
   description: { type: String, default: '' },
   method: { type: String, enum: ['rule', 'pattern'], required: true },
   
+  // 🔧 Multi-language names
+  nameAmharic: { type: String, default: '' },
+  nameTigrinya: { type: String, default: '' },
+  nameOromo: { type: String, default: '' },
+  nameChinese: { type: String, default: '' },
+  nameEnglish: { type: String, default: '' },
+  
+  // 🔧 Multi-language descriptions
+  descriptionAmharic: { type: String, default: '' },
+  descriptionTigrinya: { type: String, default: '' },
+  descriptionOromo: { type: String, default: '' },
+  descriptionChinese: { type: String, default: '' },
+  descriptionEnglish: { type: String, default: '' },
+  
   ruleConfig: {
     // CORE
     linesToWin: { type: Number, default: 1 },
@@ -45,7 +59,7 @@ const mainBingoRuleSchema = new mongoose.Schema({
       diagonals: { type: Number, default: null }
     },
     mustHaveAllTypes: { type: Boolean, default: false },
-    exclusiveLines: { type: String, default: null }, // 'rows', 'columns', 'diagonals'
+    exclusiveLines: { type: String, default: null },
     
     // INTERSECTION
     linesMustIntersect: { type: Boolean, default: false },
@@ -90,7 +104,7 @@ const mainBingoRuleSchema = new mongoose.Schema({
     
     // LINE TOUCHING
     linesCanTouch: { type: Boolean, default: true },
-    touchingType: { type: String, default: null }, // 'adjacent', 'parallel', 'perpendicular', 'any'
+    touchingType: { type: String, default: null },
     parallelLinesAllowed: { type: Boolean, default: true },
     perpendicularLinesRequired: { type: Boolean, default: false }
   },
