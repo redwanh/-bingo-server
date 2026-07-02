@@ -491,13 +491,15 @@ class GameEngine {
         
         log(`✅ Card purchased: #${card.cardNumber}, Total cards: ${game.totalCards}, Prize pool: ${game.prizePool}, Players: ${game.players.length}`);
         
-        this.io.to(roomId).emit('cardPurchased', { 
-            userId, totalCards: game.totalCards, 
-            playerCount: game.players.length, 
-            prizePool: game.prizePool, 
-            timerStartedAt: game.timerStartedAt, 
-            timerDuration: game.timerDuration 
-        });
+       this.io.to(roomId).emit('cardPurchased', {
+    cardId: card._id,
+    displayId: card.displayId,
+    totalCards: ug.totalCards,
+    playerCount: ug.players.length,
+    prizePool: ug.prizePool,
+    timerStartedAt: ug.timerStartedAt, // ← Add this
+    timerDuration: ug.timerDuration     // ← Add this
+});
         
         return { success: true, card, newBalance: user.walletBalance, cardsOwned: cc + 1 };
     } 
@@ -721,7 +723,10 @@ await card.save();
             balanceAfter: user.walletBalance, cardId: card._id
         });
         log(`📄 Transaction created`);
-        
+        if (!ug.timerStartedAt) {
+    ug.timerStartedAt = new Date();
+    await ug.save();
+}
         // 12. Start countdown
         if (ug.players.length === 1) {
             log(`⏱️ First player! Starting countdown...`);
@@ -734,11 +739,12 @@ await card.save();
         log(`   balanceUpdated → user: newBalance=${user.walletBalance}`);
         
         this.io.to(roomId).emit('cardRegistered', {
-            userId, cardId: card._id, cardNumber: card.cardNumber,
-            totalCards: ug.totalCards, playerCount: ug.players.length,
-            prizePool: ug.prizePool, timerStartedAt: ug.timerStartedAt,
-            timerDuration: ug.timerDuration
-        });
+    userId, cardId: card._id, cardNumber: card.cardNumber,
+    totalCards: ug.totalCards, playerCount: ug.players.length,
+    prizePool: ug.prizePool, 
+    timerStartedAt: ug.timerStartedAt, // ← Make sure this is sent
+    timerDuration: ug.timerDuration
+});
         
         const sock = this.getUserSocket(userId);
         if (sock) {
