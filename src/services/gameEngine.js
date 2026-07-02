@@ -1261,6 +1261,10 @@ async verifyAndFixGame(roomId) {
         game.endTime = new Date(); 
         await game.save();
         await Card.updateMany(
+  { gameId: game._id },
+  { $set: { status: 'available', userId: null, gameId: null, isBlocked: false, bingoCalled: false } }
+);
+        await Card.updateMany(
   { gameId: game._id, status: 'registered' },
   { $set: { status: 'available', userId: null, gameId: null } }
 );
