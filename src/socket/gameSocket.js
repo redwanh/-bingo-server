@@ -147,11 +147,48 @@ class GameSocket {
         }
       });
 
-      socket.on('registerCard', async ({ roomId, cardId }) => {
+      // 🔧 FIXED: registerCard with callback support
+      socket.on('registerCard', async (data, callback) => {
+        const { roomId, cardId } = data;
+        
+        console.log(`💳 [PURCHASE] ${socket.username} buying card ${cardId} in room ${roomId}`);
+        
         try {
-          await this.engine.cards.registerCard(roomId, socket.userId, cardId);
+          // Pass callback to CardService so it can respond directly
+          const result = await this.engine.cards.registerCard(
+            roomId, 
+            socket.userId, 
+            cardId,
+            callback  // 🔑 Pass callback for instant response
+          );
+          
+          // If no callback was provided (older client), emit event
+          if (!callback) {
+            socket.emit('cardRegistered', {
+              status: 'ok',
+              cardId: result.cardId,
+              cardNumber: result.cardNumber,
+              newBalance: result.newBalance
+            });
+          }
+          
+          console.log(`✅ [PURCHASE] Success: card ${result.cardNumber}`);
+          
         } catch (e) {
-          socket.emit('error', { message: e.message });
+          console.error(`❌ [PURCHASE] Failed:`, e.message);
+          
+          // Send error via callback if provided
+          if (typeof callback === 'function') {
+            callback({
+              status: 'error',
+              message: e.message
+            });
+          } else {
+            // Fallback for older clients
+            socket.emit('cardPurchaseError', { 
+              message: e.message 
+            });
+          }
         }
       });
 

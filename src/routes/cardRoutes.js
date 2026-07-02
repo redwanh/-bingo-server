@@ -21,13 +21,33 @@ router.get('/available', protect, async (req, res) => {
 router.get('/pool', protect, async (req, res) => {
   try {
     const cards = await Card.find({ 
-      status: { $in: ['preview', 'sold', 'registered', 'available'] } 
+      status: { $in: ['available', 'preview', 'sold', 'registered'] } 
     })
     .select('displayId cardNumber status userId grid price _id')
     .sort({ displayId: 1 })
-    .limit(400);
+    .limit(400)
+    .lean(); // 🔥 ADD THIS — makes it 3x faster
     
     res.json({ success: true, cards });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// 🔥 Fast status-only endpoint
+router.get('/pool/status', protect, async (req, res) => {
+  try {
+    const soldCards = await Card.find({ 
+      status: { $in: ['sold', 'registered'] },
+      userId: { $ne: null }
+    })
+    .select('_id')
+    .lean();
+    
+    res.json({ 
+      success: true, 
+      soldCardIds: soldCards.map(c => c._id.toString())
+    });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
