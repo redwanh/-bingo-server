@@ -1027,10 +1027,7 @@ async verifyAndFixGame(roomId) {
                 number: num, letter, drawCount: idx + 1, 
                 totalNumbers: current.allNumbers.length 
             });
-                        this.io.to(roomId).emit('numberDrawn', { 
-                number: num, letter, drawCount: idx + 1, 
-                totalNumbers: current.allNumbers.length 
-            });
+              
             
             // 🔥 AUTO BINGO CHECK
             if (config?.autoBingoEnabled) {
@@ -1468,6 +1465,7 @@ async endGracePeriod(roomId, gameId) {
         } 
     }, 5000);
 }
+
 
     async getGameState(roomId, userId) {
         const game = await Game.getActiveGame(roomId); 
