@@ -192,6 +192,25 @@ io.on('connection', (socket) => {
         }
     });
 
+    const Game = require('./src/models/Game');
+
+// Auto-create first game if none exists
+Game.countDocuments({ roomId: 'fast_bingo', status: { $ne: 'completed' } }).then(async (count) => {
+  if (count === 0) {
+    const lastNum = await Game.getLatestGameNumber('fast_bingo');
+    await Game.create({
+      gameId: String(lastNum + 1).padStart(10, '0'),
+      gameNumber: lastNum + 1,
+      roomId: 'fast_bingo',
+      status: 'scheduled',
+      allNumbers: [],
+      minCardsToStart: 1,
+      timerDuration: 30
+    });
+    console.log(`🆕 Created first game #${lastNum + 1}`);
+  }
+});
+
     socket.on('mainBingoMarkNumber', async (data) => {
         try {
             const Card = require('./src/models/Card');
