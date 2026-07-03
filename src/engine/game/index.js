@@ -71,62 +71,66 @@ class GameFlowService {
     this.activeCardCounts.clear();
   }
 
- startCountdown(roomId, game, config) {
+startCountdown(roomId, game, config) {
     timerManager.clearTimeout(`countdown_${roomId}`);
     timerManager.clearInterval(`poll_${roomId}`);
 
     const delayMs = config.waitTimeSeconds * 1000;
-    // 🔧 Start 2 seconds early to compensate for DB operations
+    // 🔧 Start 2 seconds early
     const adjustedDelay = Math.max(0, delayMs - 2000);
     
-    // 🔧 Pre-fetch config and cache it
     const cachedConfig = config;
     
     timerManager.createTimeout(`countdown_${roomId}`, async () => {
-      // 🔧 Single DB call: update status AND fetch in one go
-      const current = await Game.findOneAndUpdate(
-        { _id: game._id, status: { $ne: 'completed' } },
-        { $set: { status: 'in_progress', startTime: new Date() } },
-        { new: true }
-      ).lean();
+      // 🔧 STEP 1: EMIT IMMEDIATELY (0ms delay!)
+      this.engine.io.to(roomId).emit('gameStarted', {
+        gameId: game.gameId || game._id,
+        gameNumber: game.gameNumber,
+        prizePool: game.prizePool,
+        playerCount: game.players?.length || 0,
+        totalCards: game.totalCards
+      });
       
-      if (!current) return;
-      
-      const playerCount = current.players ? current.players.length : 0;
-      
-      if (playerCount >= cachedConfig.minPlayersToStart) {
-        timerManager.clearInterval(`poll_${roomId}`);
+      // 🔧 STEP 2: Draw first number IMMEDIATELY
+      if (game.allNumbers && game.allNumbers.length > 0) {
+        const num = game.allNumbers[0];
+        const letter = this.engine.getBingoLetter(num);
         
-        // 🔧 Emit IMMEDIATELY (no await needed)
-        this.engine.io.to(roomId).emit('gameStarted', {
-          gameId: current.gameId || current._id,
-          gameNumber: current.gameNumber,
-          prizePool: current.prizePool,
-          playerCount: current.players?.length || 0,
-          totalCards: current.totalCards
+        this.engine.io.to(roomId).emit('numberDrawn', { 
+          number: num, letter, drawCount: 1, 
+          totalNumbers: game.allNumbers.length 
         });
-        
-        // 🔧 Use the already-fetched game object (no second fetch!)
-        this.drawNumbers(roomId, current, cachedConfig);
-        
-      } else if (playerCount === 0 && cachedConfig.resetOnNoPlayers) {
-        await Game.updateOne(
-          { _id: current._id },
-          { $set: { timerStartedAt: new Date(), status: 'waiting' } }
-        );
-        
-        this.engine.io.to(roomId).emit('countdownReset', {
-          timerStartedAt: new Date(),
-          timerDuration: cachedConfig.waitTimeSeconds
-        });
-        
-        // Re-fetch needed here since status changed
-        const updatedGame = await Game.findById(current._id).lean();
-        this.startCountdown(roomId, updatedGame, cachedConfig);
-      } else {
-        const updatedGame = await Game.findById(current._id).lean();
-        this.startPlayerPoll(roomId, updatedGame, cachedConfig);
       }
+      
+      // 🔧 STEP 3: All DB operations in background (fire and forget)
+      Promise.all([
+        Game.updateOne(
+          { _id: game._id },
+          { $set: { status: 'in_progress', startTime: new Date() } }
+        ),
+        Game.updateOne(
+          { _id: game._id },
+          { 
+            $set: { 
+              currentNumber: game.allNumbers?.[0] 
+                ? { number: game.allNumbers[0], letter: this.engine.getBingoLetter(game.allNumbers[0]) } 
+                : null 
+            }, 
+            $push: { 
+              drawnNumbers: game.allNumbers?.[0] 
+                ? { number: game.allNumbers[0], letter: this.engine.getBingoLetter(game.allNumbers[0]) } 
+                : null 
+            } 
+          }
+        ).catch(() => {})
+      ]).then(async () => {
+        // After DB confirms, fetch fresh and start draw loop
+        const current = await Game.findById(game._id).lean();
+        if (current && current.status !== 'completed') {
+          this.drawNumbers(roomId, current, cachedConfig);
+        }
+      }).catch(err => console.error('Background save error:', err));
+      
     }, adjustedDelay, 'game_countdown');
 }
 
@@ -164,16 +168,10 @@ class GameFlowService {
     }, 3000, 'player_poll');
   }
 
- async startGame(roomId, game, config) {
+async startGame(roomId, game, config) {
     timerManager.clearInterval(`poll_${roomId}`);
     
-    // 🔧 Update AND emit in parallel
-    const updatePromise = Game.updateOne(
-      { _id: game._id },
-      { $set: { status: 'in_progress', startTime: new Date() } }
-    );
-    
-    // Emit immediately (don't wait for DB)
+    // 🔧 EMIT FIRST
     this.engine.io.to(roomId).emit('gameStarted', {
       gameId: game.gameId || game._id,
       gameNumber: game.gameNumber,
@@ -182,151 +180,57 @@ class GameFlowService {
       totalCards: game.totalCards
     });
     
-    // 🔧 Start drawing immediately (don't wait for DB update)
-    this.drawNumbers(roomId, game, config);
+    // 🔧 Draw first number immediately
+    if (game.allNumbers && game.allNumbers.length > 0) {
+      const num = game.allNumbers[0];
+      const letter = this.engine.getBingoLetter(num);
+      this.engine.io.to(roomId).emit('numberDrawn', { 
+        number: num, letter, drawCount: 1, 
+        totalNumbers: game.allNumbers.length 
+      });
+    }
     
-    // Let the DB update complete in background
-    await updatePromise;
+    // 🔧 DB in background
+    Game.updateOne(
+      { _id: game._id },
+      { $set: { status: 'in_progress', startTime: new Date() } }
+    ).catch(() => {});
+    
+    // Start draw loop immediately with cached data
+    this.drawNumbers(roomId, game, config);
 }
 
- drawNumbers(roomId, game, config) {
-    let idx = 0;
+drawNumbers(roomId, game, config) {
+    // 🔧 Start from index 1 (0 already drawn)
+    let idx = 1;
     const gameId = game._id || game.gameId;
-    const gameIdStr = gameId.toString();
     let cachedGame = game;
-    let activeCountCache = null;
     
     timerManager.clearInterval(`draw_${roomId}`);
     
-    // 🔧 Initialize active card count
-    Card.countDocuments({ 
-      gameId, status: 'registered', isBlocked: false, bingoCalled: false 
-    }).then(count => {
-      activeCountCache = count;
-      this.activeCardCounts.set(gameIdStr, count);
-    });
+    // 🔧 NO drawFirstNumber - already emitted!
+    // 🔧 NO initial countDocuments - do it lazily
     
-    // 🔧 Draw first number IMMEDIATELY (don't wait for interval)
-    const drawFirstNumber = async () => {
-      if (!game.allNumbers || game.allNumbers.length === 0) return;
-      
-      const num = game.allNumbers[0];
-      const letter = this.engine.getBingoLetter(num);
-      const newNumber = { number: num, letter };
-      
-      // Update cache
-      if (!cachedGame.drawnNumbers) cachedGame.drawnNumbers = [];
-      cachedGame.drawnNumbers.push(newNumber);
-      cachedGame.currentNumber = newNumber;
-      
-      // Emit first number right away
-      this.engine.io.to(roomId).emit('numberDrawn', { 
-        number: num, letter, drawCount: 1, 
-        totalNumbers: cachedGame.allNumbers.length 
-      });
-      
-      idx = 1;
-      
-      // Save in background (fire and forget)
-      Game.updateOne(
-        { _id: gameId },
-        { $set: { currentNumber: newNumber }, $push: { drawnNumbers: newNumber } }
-      ).catch(err => console.error('First draw save error:', err));
-    };
-    
-    // Execute first draw immediately
-    drawFirstNumber();
-    
-    // Then continue with interval for subsequent numbers
     timerManager.createInterval(`draw_${roomId}`, async () => {
-      // 🔧 Only fetch full game every 5 draws
-      if (idx % 5 === 0 || !cachedGame) {
+      // Only fetch from DB every 10 draws or when needed
+      if (idx % 10 === 0 || !cachedGame) {
         const fresh = await Game.findById(gameId).lean();
-        if (!fresh) {
+        if (!fresh || fresh.status === 'completed' || fresh.status === 'grace_period') {
           timerManager.clearInterval(`draw_${roomId}`);
           return;
         }
         cachedGame = fresh;
       }
       
-      if (!cachedGame || cachedGame.status === 'completed' || cachedGame.status === 'grace_period') {
-        timerManager.clearInterval(`draw_${roomId}`); 
-        return;
-      }
-      
       if (idx >= cachedGame.allNumbers.length) {
         timerManager.clearInterval(`draw_${roomId}`);
-        const fullGame = await Game.findById(gameId);
-        await this.endGame(roomId, fullGame);
+        await this.endGame(roomId, cachedGame);
         return;
       }
       
-      // 🔧 Only check active cards every 10 draws
-      if (idx % 10 === 0 || idx === 0 || (activeCountCache !== null && activeCountCache < 5)) {
-        const freshCount = await Card.countDocuments({ 
-          gameId, status: 'registered', isBlocked: false, bingoCalled: false 
-        });
-        activeCountCache = freshCount;
-        this.activeCardCounts.set(gameIdStr, freshCount);
-      }
-      
-      // All cards blocked check
-      if (activeCountCache === 0 && cachedGame.totalCards > 0) {
-        timerManager.clearInterval(`draw_${roomId}`);
-        
-        const cards = await Card.find({ gameId, status: 'registered' });
-        
-        for (const card of cards) {
-          const user = await User.findById(card.userId);
-          if (user) {
-            user.walletBalance += card.price; 
-            await user.save();
-            await Transaction.create({
-              userId: user._id, type: 'refund', amount: card.price,
-              gameId: cachedGame.gameId, gameNumber: cachedGame.gameNumber,
-              description: 'Refund - all cards blocked', balanceAfter: user.walletBalance
-            });
-          }
-        }
-        
-        await Game.updateOne(
-          { _id: gameId },
-          { $set: { status: 'completed', endTime: new Date(), endReason: 'all_cards_blocked' } }
-        );
-        
-        await this.resetAllCards(roomId);
-        
-        this.engine.io.to(roomId).emit('gameEnded', { 
-          gameId: cachedGame._id, winners: [], prizePool: cachedGame.prizePool, 
-          reason: 'All cards blocked', refunded: true 
-        });
-        
-        this.scheduleNewGame(roomId);
-        return;
-      }
-      
-      // Draw number
+      // Draw next number
       const num = cachedGame.allNumbers[idx];
       const letter = this.engine.getBingoLetter(num);
-      const newNumber = { number: num, letter };
-      
-      // 🔧 Batch save: only persist every 5 draws
-      if (idx % 5 === 0) {
-        await Game.updateOne(
-          { _id: gameId },
-          { $set: { currentNumber: newNumber }, $push: { drawnNumbers: newNumber } }
-        );
-      } else {
-        Game.updateOne(
-          { _id: gameId },
-          { $set: { currentNumber: newNumber }, $push: { drawnNumbers: newNumber } }
-        ).catch(err => console.error('Batch save error:', err));
-      }
-      
-      // Update local cache
-      if (!cachedGame.drawnNumbers) cachedGame.drawnNumbers = [];
-      cachedGame.drawnNumbers.push(newNumber);
-      cachedGame.currentNumber = newNumber;
       
       // Emit immediately
       this.engine.io.to(roomId).emit('numberDrawn', { 
@@ -334,59 +238,11 @@ class GameFlowService {
         totalNumbers: cachedGame.allNumbers.length 
       });
       
-      // 🔧 OPTIMIZED: Auto-bingo using batch check
-      if (config?.autoBingoEnabled && idx >= 4) {
-        const allRegisteredCards = await Card.find({ 
-          gameId, status: 'registered', isBlocked: false, bingoCalled: false 
-        }).lean();
-        
-        if (allRegisteredCards.length > 0) {
-          // Use batch check - builds drawnSet ONCE for all cards
-          const results = this.engine.bingo.checkMultipleCards(
-            allRegisteredCards, 
-            cachedGame.drawnNumbers, 
-            config
-          );
-          
-          for (const { cardId, winType } of results) {
-            if (winType) {
-              const card = allRegisteredCards.find(c => c._id.toString() === cardId.toString());
-              if (!card) continue;
-              
-              await Card.updateOne(
-                { _id: card._id },
-                { $set: { bingoCalled: true, bingoCallTime: new Date(), winType } }
-              );
-              
-              const fullGame = await Game.findById(gameId);
-              
-              if (fullGame.status === 'in_progress') {
-                timerManager.clearInterval(`draw_${roomId}`);
-                
-                await Game.updateOne(
-                  { _id: gameId },
-                  { $set: { status: 'bingo_called', gracePeriodEndTime: new Date(Date.now() + (config.gracePeriodSeconds || 10) * 1000) } }
-                );
-                
-                this.engine.io.to(roomId).emit('firstBingo', { 
-                  userId: card.userId, cardId: card._id, cardNumber: card.cardNumber, 
-                  winType, autoBingo: true 
-                });
-                
-                timerManager.createTimeout(`grace_${roomId}`, 
-                  () => this.endGracePeriod(roomId, gameId), 
-                  (config.gracePeriodSeconds || 10) * 1000, 'grace_period');
-                return;
-              } else {
-                this.engine.io.to(roomId).emit('additionalBingo', { 
-                  userId: card.userId, cardId: card._id, cardNumber: card.cardNumber, 
-                  winType, autoBingo: true 
-                });
-              }
-            }
-          }
-        }
-      }
+      // Save in background (fire and forget)
+      Game.updateOne(
+        { _id: gameId },
+        { $set: { currentNumber: { number: num, letter } }, $push: { drawnNumbers: { number: num, letter } } }
+      ).catch(() => {});
       
       idx++;
     }, config.drawIntervalSeconds * 1000, 'number_draw');
