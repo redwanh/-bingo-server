@@ -5,23 +5,6 @@ const User = require('../../models/User');
 const Transaction = require('../../models/Transaction');
 const timerManager = require('../../utils/TimerManager');
 
-function markWinningCells(grid, drawnNumbers) {
-    const drawnSet = new Set(drawnNumbers.map(d => d.number));
-    const markedGrid = {};
-    
-    ['B', 'I', 'N', 'G', 'O'].forEach(col => {
-        if (grid && grid[col]) {
-            markedGrid[col] = grid[col].map(cell => ({
-                ...cell,
-                isMarked: drawnSet.has(cell.number) || cell.number === 0,
-                isWinningCell: drawnSet.has(cell.number) && cell.number !== 0
-            }));
-        }
-    });
-    
-    return markedGrid;
-}
-
 class GameFlowService {
   constructor(engine) {
     this.engine = engine;
@@ -372,29 +355,20 @@ drawNumbers(roomId, game, config) {
       idx++;
     }, config.drawIntervalSeconds * 1000, 'number_draw');
 }
- async endGracePeriod(roomId, gameId) {
+  async endGracePeriod(roomId, gameId) {
     const game = await Game.findById(gameId).lean();
     if (!game || game.status === 'completed') return;
     
     const config = await GameConfig.findOne({ roomId: game.roomId }).lean();
     
-    // 🔧 STEP 1: Emit gameEnded IMMEDIATELY with basic info
-    // Winners will be processed in background
-    this.engine.io.to(roomId).emit('gameEnded', {
-      gameId: game._id,
-      winners: [], // Will be updated via another event
-      prizePool: game.prizePool,
-      processing: true // Flag to show "Processing winners..."
-    });
-    
-    // 🔧 STEP 2: Fetch called cards and check wins in parallel
+    // 🔧 Parallel fetch called cards
     const calledCards = await Card.find({ 
       gameId: game._id, 
       bingoCalled: true, 
       isBlocked: false 
     }).populate('userId').lean();
     
-    // Parallel win checks
+    // 🔧 Parallel win checks
     const winCheckPromises = calledCards.map(card => 
       this.engine.bingo.checkWin(card, game.drawnNumbers, config)
     );
@@ -421,64 +395,58 @@ drawNumbers(roomId, game, config) {
     }
     
     // Process winners
-    if (winners.length > 0) {
-      const commissionRate = config?.commissionPercentage || 10;
-      const comm = (game.prizePool * commissionRate) / 100;
-      const ppw = (game.prizePool - comm) / winners.length;
-      
-      const userUpdates = [];
-      const transactionOps = [];
-      const winnerEntries = [];
-      
-      for (const { card, winType } of winners) {
-        const userId = card.userId._id || card.userId;
-        
+ // Process winners - ADD winning numbers extraction
+if (winners.length > 0) {
+    const commissionRate = config?.commissionPercentage || 10;
+    const comm = (game.prizePool * commissionRate) / 100;
+    const ppw = (game.prizePool - comm) / winners.length;
+    
+    const userUpdates = [];
+    const transactionOps = [];
+    const winnerEntries = [];
+    
+    for (const { card, winType } of winners) {
         userUpdates.push({
-          updateOne: {
-            filter: { _id: userId },
-            update: { $inc: { walletBalance: ppw } }
-          }
+            updateOne: {
+                filter: { _id: card.userId._id || card.userId },
+                update: { $inc: { walletBalance: ppw } }
+            }
         });
         
-        // Mark winning cells on grid
+        const user = await User.findById(card.userId._id || card.userId);
+        
+        transactionOps.push({
+            userId: user._id,
+            type: 'prize_win',
+            amount: ppw,
+            gameId: game.gameId,
+            gameNumber: game.gameNumber,
+            description: `Won with ${winType}`,
+            balanceAfter: (user.walletBalance || 0) + ppw
+        });
+        
+        // 🔧 MARK WINNING CELLS on the grid
         const markedGrid = markWinningCells(card.grid, game.drawnNumbers);
         
         winnerEntries.push({
-          userId: userId,
-          cardId: card._id,
-          winType,
-          prizeAmount: ppw,
-          winnerName: card.userId?.fullName || 'Player',
-          winnerPhone: card.userId?.phone || '',
-          cardNumber: card.cardNumber,
-          cardGrid: markedGrid,
-          newBalance: 0 // Will update later
+            userId: user._id,
+            cardId: card._id,
+            winType,
+            prizeAmount: ppw,
+            winnerName: user.fullName,
+            winnerPhone: user.phone,
+            cardNumber: card.cardNumber,
+            cardGrid: markedGrid,  // 🔧 Use marked grid
+            newBalance: (user.walletBalance || 0) + ppw
         });
-      }
+    }
+    // ... rest
+
       
       // Bulk update user balances
-      if (userUpdates.length > 0) {
-        await User.bulkWrite(userUpdates, { ordered: false });
-      }
+      await User.bulkWrite(userUpdates, { ordered: false });
       
-      // Fetch updated users for balances and create transactions
-      for (const entry of winnerEntries) {
-        const user = await User.findById(entry.userId).lean();
-        const newBalance = user?.walletBalance || 0;
-        entry.newBalance = newBalance;
-        
-        transactionOps.push({
-          userId: entry.userId,
-          type: 'prize_win',
-          amount: entry.prizeAmount,
-          gameId: game.gameId,
-          gameNumber: game.gameNumber,
-          description: `Won with ${entry.winType}`,
-          balanceAfter: newBalance
-        });
-      }
-      
-      // Bulk create transactions
+      // Create transactions
       if (transactionOps.length > 0) {
         await Transaction.insertMany(transactionOps);
       }
@@ -504,29 +472,11 @@ drawNumbers(roomId, game, config) {
           } 
         }
       );
-      
-      // 🔧 STEP 3: Emit winner update with full details
-      this.engine.io.to(roomId).emit('winnersUpdate', {
-        gameId: game._id,
-        winners: winnerEntries,
-        prizePool: game.prizePool,
-        commission: comm,
-        balance: winnerEntries[0]?.newBalance || 0
-      });
-      
     } else {
-      // No winners
       await Game.updateOne(
         { _id: gameId },
         { $set: { status: 'completed', endTime: new Date() } }
       );
-      
-      this.engine.io.to(roomId).emit('winnersUpdate', {
-        gameId: game._id,
-        winners: [],
-        prizePool: game.prizePool,
-        reason: 'No winner'
-      });
     }
     
     // Reset cards
@@ -535,11 +485,19 @@ drawNumbers(roomId, game, config) {
     timerManager.clearInterval(`draw_${roomId}`);
     timerManager.clearTimeout(`grace_${roomId}`);
     
+    // Fetch final game state for emit
+    const finalGame = await Game.findById(gameId).lean();
+    
+    this.engine.io.to(roomId).emit('gameEnded', { 
+      gameId: game._id, 
+      winners: finalGame.winners || [], 
+      prizePool: game.prizePool, 
+      commission: finalGame.commission || 0, 
+      balance: finalGame.winners?.[0]?.newBalance || 0 
+    });
+    
     this.scheduleNewGame(roomId);
-}
-
-// 🔧 Helper: Mark winning cells
-
+  }
 
   async endGame(roomId, game) {
     // Bulk update game status
