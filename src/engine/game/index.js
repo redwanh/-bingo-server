@@ -201,15 +201,21 @@ async startGame(roomId, game, config) {
 }
 
 drawNumbers(roomId, game, config) {
-    // 🔧 Start from index 1 (0 already drawn)
-    let idx = 1;
+    let idx = 1; // Start from 1 (0 already drawn)
     const gameId = game._id || game.gameId;
+    const gameIdStr = gameId.toString();
     let cachedGame = game;
+    let activeCountCache = null;
     
     timerManager.clearInterval(`draw_${roomId}`);
     
-    // 🔧 NO drawFirstNumber - already emitted!
-    // 🔧 NO initial countDocuments - do it lazily
+    // Initialize active card count in background
+    Card.countDocuments({ 
+      gameId, status: 'registered', isBlocked: false, bingoCalled: false 
+    }).then(count => {
+      activeCountCache = count;
+      this.activeCardCounts.set(gameIdStr, count);
+    });
     
     timerManager.createInterval(`draw_${roomId}`, async () => {
       // Only fetch from DB every 10 draws or when needed
@@ -224,7 +230,51 @@ drawNumbers(roomId, game, config) {
       
       if (idx >= cachedGame.allNumbers.length) {
         timerManager.clearInterval(`draw_${roomId}`);
-        await this.endGame(roomId, cachedGame);
+        const fullGame = await Game.findById(gameId);
+        await this.endGame(roomId, fullGame);
+        return;
+      }
+      
+      // Only check active cards every 10 draws
+      if (idx % 10 === 0 || activeCountCache === null || activeCountCache < 5) {
+        const freshCount = await Card.countDocuments({ 
+          gameId, status: 'registered', isBlocked: false, bingoCalled: false 
+        });
+        activeCountCache = freshCount;
+        this.activeCardCounts.set(gameIdStr, freshCount);
+      }
+      
+      // All cards blocked check
+      if (activeCountCache === 0 && cachedGame.totalCards > 0) {
+        timerManager.clearInterval(`draw_${roomId}`);
+        
+        const cards = await Card.find({ gameId, status: 'registered' });
+        for (const card of cards) {
+          const user = await User.findById(card.userId);
+          if (user) {
+            user.walletBalance += card.price; 
+            await user.save();
+            await Transaction.create({
+              userId: user._id, type: 'refund', amount: card.price,
+              gameId: cachedGame.gameId, gameNumber: cachedGame.gameNumber,
+              description: 'Refund - all cards blocked', balanceAfter: user.walletBalance
+            });
+          }
+        }
+        
+        await Game.updateOne(
+          { _id: gameId },
+          { $set: { status: 'completed', endTime: new Date(), endReason: 'all_cards_blocked' } }
+        );
+        
+        await this.resetAllCards(roomId);
+        
+        this.engine.io.to(roomId).emit('gameEnded', { 
+          gameId: cachedGame._id, winners: [], prizePool: cachedGame.prizePool, 
+          reason: 'All cards blocked', refunded: true 
+        });
+        
+        this.scheduleNewGame(roomId);
         return;
       }
       
@@ -232,22 +282,79 @@ drawNumbers(roomId, game, config) {
       const num = cachedGame.allNumbers[idx];
       const letter = this.engine.getBingoLetter(num);
       
+      // Update local cache
+      if (!cachedGame.drawnNumbers) cachedGame.drawnNumbers = [];
+      cachedGame.drawnNumbers.push({ number: num, letter });
+      cachedGame.currentNumber = { number: num, letter };
+      
       // Emit immediately
       this.engine.io.to(roomId).emit('numberDrawn', { 
         number: num, letter, drawCount: idx + 1, 
         totalNumbers: cachedGame.allNumbers.length 
       });
       
-      // Save in background (fire and forget)
+      // Save in background
       Game.updateOne(
         { _id: gameId },
         { $set: { currentNumber: { number: num, letter } }, $push: { drawnNumbers: { number: num, letter } } }
       ).catch(() => {});
       
+      // 🔧 AUTO-BINGO CHECK (RESTORED)
+      if (config?.autoBingoEnabled && idx >= 4) {
+        const allRegisteredCards = await Card.find({ 
+          gameId, status: 'registered', isBlocked: false, bingoCalled: false 
+        }).lean();
+        
+        if (allRegisteredCards.length > 0) {
+          const results = this.engine.bingo.checkMultipleCards(
+            allRegisteredCards, 
+            cachedGame.drawnNumbers, 
+            config
+          );
+          
+          for (const { cardId, winType } of results) {
+            if (winType) {
+              const card = allRegisteredCards.find(c => c._id.toString() === cardId.toString());
+              if (!card) continue;
+              
+              await Card.updateOne(
+                { _id: card._id },
+                { $set: { bingoCalled: true, bingoCallTime: new Date(), winType } }
+              );
+              
+              const fullGame = await Game.findById(gameId);
+              
+              if (fullGame.status === 'in_progress') {
+                timerManager.clearInterval(`draw_${roomId}`);
+                
+                await Game.updateOne(
+                  { _id: gameId },
+                  { $set: { status: 'bingo_called', gracePeriodEndTime: new Date(Date.now() + (config.gracePeriodSeconds || 10) * 1000) } }
+                );
+                
+                this.engine.io.to(roomId).emit('firstBingo', { 
+                  userId: card.userId, cardId: card._id, cardNumber: card.cardNumber, 
+                  winType, autoBingo: true 
+                });
+                
+                timerManager.createTimeout(`grace_${roomId}`, 
+                  () => this.endGracePeriod(roomId, gameId), 
+                  (config.gracePeriodSeconds || 10) * 1000, 'grace_period');
+                return;
+              } else {
+                this.engine.io.to(roomId).emit('additionalBingo', { 
+                  userId: card.userId, cardId: card._id, cardNumber: card.cardNumber, 
+                  winType, autoBingo: true 
+                });
+              }
+            }
+          }
+        }
+      }
+      
       idx++;
     }, config.drawIntervalSeconds * 1000, 'number_draw');
 }
-
   async endGracePeriod(roomId, gameId) {
     const game = await Game.findById(gameId).lean();
     if (!game || game.status === 'completed') return;
