@@ -3,54 +3,108 @@ const mongoose = require('mongoose');
 const Card = require('../models/Card');
 const CardGenerator = require('../services/cardGenerator');
 
-async function seedCards(count = 10000, startDisplayId = 10000) {
+async function seedCards() {
   try {
     await mongoose.connect(process.env.MONGODB_URI);
     console.log('✅ MongoDB connected\n');
 
-    await Card.deleteMany({});
-    console.log('Cleared old cards\n');
+    const existingCount = await Card.countDocuments();
+    console.log(`Existing cards in DB: ${existingCount.toLocaleString()}\n`);
 
-    console.log(`Generating ${count.toLocaleString()} bingo cards...`);
-    console.log(`Display IDs: ${startDisplayId} - ${startDisplayId + count - 1}`);
-    console.time('Time');
+    // ══════════════════════════════════════
+    // BATCH 1: Create cards 10000-10400 with status 'available'
+    // ══════════════════════════════════════
+    const availableStart = 10000;
+    const availableEnd = 10400;
+    const availableCount = availableEnd - availableStart + 1;
+    
+    console.log(`📦 Creating ${availableCount} cards (${availableStart}-${availableEnd}) with status: available`);
+    console.time('Available Cards');
+
+    const availableCards = [];
+    for (let i = availableStart; i <= availableEnd; i++) {
+      const card = CardGenerator.generateCard(i - availableStart + 1);
+      card.displayId = i;
+      card.cardNumber = i - availableStart + 1;
+      card.status = 'available';
+      card.userId = null;
+      card.gameId = null;
+      availableCards.push(card);
+    }
+
+    await Card.insertMany(availableCards, { ordered: false });
+    console.timeEnd('Available Cards');
+    console.log(`✅ ${availableCount} available cards created!\n`);
+
+    // ══════════════════════════════════════
+    // BATCH 2: Create cards 20000-29999 with status 'preview'
+    // ══════════════════════════════════════
+    const previewStart = 20000;
+    const previewEnd = 29999;
+    const previewCount = previewEnd - previewStart + 1;
+    
+    console.log(`📦 Creating ${previewCount.toLocaleString()} cards (${previewStart}-${previewEnd}) with status: preview`);
+    console.time('Preview Cards');
 
     const BATCH = 500;
-    const batches = Math.ceil(count / BATCH);
+    const batches = Math.ceil(previewCount / BATCH);
     let inserted = 0;
 
     for (let b = 0; b < batches; b++) {
       const cards = [];
       const start = b * BATCH + 1;
-      const end = Math.min((b + 1) * BATCH, count);
+      const end = Math.min((b + 1) * BATCH, previewCount);
 
       for (let i = start; i <= end; i++) {
         const card = CardGenerator.generateCard(i);
-        card.displayId = startDisplayId + i - 1; // ← ADD DISPLAY ID STARTING FROM 10000
+        card.displayId = previewStart + i - 1;
+        card.cardNumber = i;
+        card.status = 'preview';
+        card.userId = null;
+        card.gameId = null;
         cards.push(card);
       }
 
       await Card.insertMany(cards, { ordered: false });
       inserted += cards.length;
-      console.log(`   ${inserted.toLocaleString()}/${count.toLocaleString()} (${Math.round(inserted/count*100)}%)`);
+      console.log(`   ${inserted.toLocaleString()}/${previewCount.toLocaleString()} (${Math.round(inserted/previewCount*100)}%)`);
     }
 
-    console.timeEnd('Time');
-    console.log(`\n✅ ${inserted.toLocaleString()} cards in database!`);
+    console.timeEnd('Preview Cards');
+    console.log(`✅ ${previewCount.toLocaleString()} preview cards created!\n`);
 
-    // Show sample
-    const sample = await Card.findOne({ serialNumber: 1 });
-    console.log('\nSample Card #1:');
-    console.log(`  displayId: ${sample.displayId}`);
-    console.log(`  cardId: ${sample.cardId}`);
-    console.log(CardGenerator.displayCard(sample.grid));
+    // ══════════════════════════════════════
+    // SUMMARY
+    // ══════════════════════════════════════
+    const totalAfter = await Card.countDocuments();
+    const availableTotal = await Card.countDocuments({ status: 'available' });
+    const previewTotal = await Card.countDocuments({ status: 'preview' });
+    
+    console.log('═══════════════════════════════');
+    console.log('📊 DATABASE SUMMARY');
+    console.log('═══════════════════════════════');
+    console.log(`   Total cards:    ${totalAfter.toLocaleString()}`);
+    console.log(`   Available:      ${availableTotal.toLocaleString()}`);
+    console.log(`   Preview:        ${previewTotal.toLocaleString()}`);
+    console.log(`   New available:  ${availableCount} (IDs ${availableStart}-${availableEnd})`);
+    console.log(`   New preview:    ${previewCount.toLocaleString()} (IDs ${previewStart}-${previewEnd})`);
 
-    // Show another sample to verify displayId
-    const sample2 = await Card.findOne({ serialNumber: 100 });
-    if (sample2) {
-      console.log('\nSample Card #100:');
-      console.log(`  displayId: ${sample2.displayId}`);
-      console.log(`  cardId: ${sample2.cardId}`);
+    // Sample available card
+    const sampleAvail = await Card.findOne({ displayId: 10001 });
+    if (sampleAvail) {
+      console.log(`\n📋 Sample Available Card #10001:`);
+      console.log(`   displayId: ${sampleAvail.displayId}`);
+      console.log(`   status: ${sampleAvail.status}`);
+      console.log(`   userId: ${sampleAvail.userId || 'null'}`);
+    }
+
+    // Sample preview card
+    const samplePrev = await Card.findOne({ displayId: 20001 });
+    if (samplePrev) {
+      console.log(`\n📋 Sample Preview Card #20001:`);
+      console.log(`   displayId: ${samplePrev.displayId}`);
+      console.log(`   status: ${samplePrev.status}`);
+      console.log(`   userId: ${samplePrev.userId || 'null'}`);
     }
 
     await mongoose.connection.close();
@@ -61,6 +115,4 @@ async function seedCards(count = 10000, startDisplayId = 10000) {
   }
 }
 
-const count = parseInt(process.argv[2]) || 10000;
-const startId = parseInt(process.argv[3]) || 10000; // ← Custom start ID
-seedCards(count, startId);
+seedCards();

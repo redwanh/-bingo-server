@@ -11,234 +11,226 @@ class CardService {
     this.purchaseLocks = new Map();
   }
 
-  async registerCard(roomId, userId, cardId, socketCallback) {
+async registerCard(roomId, userId, cardId, socketCallback) {
     const lockKey = `${roomId}_${cardId}`;
 
     console.log("🟢 [REGISTER] Starting:", { roomId, userId, cardId });
 
     if (this.purchaseLocks.has(lockKey)) {
-      const err = "Card is being purchased by another player";
-      if (typeof socketCallback === "function")
-        socketCallback({ status: "error", message: err });
-      throw new Error(err);
+        const err = "Card is being purchased by another player";
+        if (typeof socketCallback === "function")
+            socketCallback({ status: "error", message: err });
+        throw new Error(err);
     }
 
     this.purchaseLocks.set(lockKey, { userId, timestamp: Date.now() });
 
     try {
-      // Step 1: Validate game
-      const game = await Game.getActiveGame(roomId);
-      console.log(
-        "🟢 [REGISTER] Game:",
-        game ? `Status: ${game.status}` : "NULL",
-      );
+        // Step 1: Validate game
+        const game = await Game.getActiveGame(roomId);
+        console.log("🟢 [REGISTER] Game:", game ? `Status: ${game.status}` : "NULL");
 
-      if (!game || !["scheduled", "waiting"].includes(game.status)) {
-        throw new Error("Game not available for purchase");
-      }
+        if (!game || !["scheduled", "waiting"].includes(game.status)) {
+            throw new Error("Game not available for purchase");
+        }
 
-      const config = await GameConfig.findOne({ roomId });
-      if (!config) throw new Error("Game configuration not found");
+        const config = await GameConfig.findOne({ roomId });
+        if (!config) throw new Error("Game configuration not found");
+        
+        // 🔧 FIX: Get price from config
+        const cardPrice = config.cardPrice;
+        console.log('💰 [REGISTER] Card price from config:', cardPrice);
 
-      // Step 2: Atomic card claim
-      console.log("🟢 [REGISTER] Looking for card:", cardId);
-      // 🎯 Step 2: Atomic card claim - Fast Bingo uses 'available' status
-      // 🎯 Step 2: Atomic card claim
-const card = await Card.findOneAndUpdate(
-  {
-    _id: cardId,
-    status: 'available',
-    $or: [
-      { gameId: game._id },
-      { gameId: null }  // 🔧 Cards not yet assigned to a game
-    ]
-  },
-  {
-    $set: {
-      status: 'reserved',
-      reservedAt: new Date(),
-      reservedBy: userId,
-      gameId: game._id  // 🔧 Assign to this game
-    }
-  },
-  { new: true }
-);
-
-console.log('🟢 [REGISTER] Query result:', card ? `Found - Status: ${card.status}` : 'NOT FOUND');
-
-      if (!card) {
-        // Debug: check what happened
-        const cardExists = await Card.findById(cardId);
-        console.log(
-          "❌ [REGISTER] Card not found. Exists:",
-          !!cardExists,
-          "Status:",
-          cardExists?.status,
-          "UserId:",
-          cardExists?.userId?.toString(),
+        // Step 2: Atomic card claim
+        const card = await Card.findOneAndUpdate(
+            {
+                _id: cardId,
+                status: 'available',
+                $or: [
+                    { gameId: game._id },
+                    { gameId: null }
+                ]
+            },
+            {
+                $set: {
+                    status: 'reserved',
+                    reservedAt: new Date(),
+                    reservedBy: userId,
+                    gameId: game._id
+                }
+            },
+            { new: true }
         );
-        throw new Error("Card is no longer available");
-      }
 
-      console.log("🟢 [REGISTER] Card claimed:", card._id);
+        if (!card) {
+            const cardExists = await Card.findById(cardId);
+            console.log("❌ [REGISTER] Card not found. Exists:", !!cardExists,
+                "Status:", cardExists?.status,
+                "UserId:", cardExists?.userId?.toString());
+            throw new Error("Card is no longer available");
+        }
 
-      // Step 3: Check limit
-      const registeredCount = await Card.countDocuments({
-        gameId: game._id,
-        userId,
-        status: "registered",
-      });
-
-      if (registeredCount >= config.maxCardsPerPlayer) {
-        await Card.findByIdAndUpdate(cardId, {
-          $set: { status: "preview", reservedBy: null, reservedAt: null },
+        // Step 3: Check limit
+        const registeredCount = await Card.countDocuments({
+            gameId: game._id,
+            userId,
+            status: "registered",
         });
-        throw new Error(`Maximum ${config.maxCardsPerPlayer} cards allowed`);
-      }
 
-      // Step 4: Deduct balance
-      const user = await User.findOneAndUpdate(
-        { _id: userId, walletBalance: { $gte: card.price } },
-        { $inc: { walletBalance: -card.price } },
-        { new: true },
-      );
+        if (registeredCount >= config.maxCardsPerPlayer) {
+            await Card.findByIdAndUpdate(cardId, {
+                $set: { status: "preview", reservedBy: null, reservedAt: null },
+            });
+            throw new Error(`Maximum ${config.maxCardsPerPlayer} cards allowed`);
+        }
 
-      if (!user) {
-        await Card.findByIdAndUpdate(cardId, {
-          $set: { status: "preview", reservedBy: null, reservedAt: null },
+        // 🔧 FIXED Step 4: Deduct balance using config.cardPrice
+        const user = await User.findOneAndUpdate(
+            { 
+                _id: userId, 
+                walletBalance: { $gte: cardPrice }  // 🔧 Use config price
+            },
+            { 
+                $inc: { walletBalance: -cardPrice }  // 🔧 Use config price
+            },
+            { new: true },
+        );
+
+        if (!user) {
+            await Card.findByIdAndUpdate(cardId, {
+                $set: { status: "preview", reservedBy: null, reservedAt: null },
+            });
+            throw new Error(`Insufficient balance. Need ${cardPrice} ETB`);
+        }
+
+        console.log("🟢 [REGISTER] Balance deducted:", user.walletBalance);
+
+        // Step 5: Update game
+        const updatedGame = await Game.findOneAndUpdate(
+            { _id: game._id, status: { $in: ["scheduled", "waiting"] } },
+            {
+                $inc: { 
+                    totalCards: 1, 
+                    prizePool: cardPrice  // 🔧 Use config price here too
+                },
+                $set: {
+                    timerStartedAt: game.players.length === 0 ? new Date() : game.timerStartedAt,
+                    status: game.players.length === 0 ? "waiting" : game.status,
+                },
+            },
+            { new: true },
+        );
+
+        if (!updatedGame) {
+            await User.findByIdAndUpdate(userId, {
+                $inc: { walletBalance: cardPrice },  // 🔧 Refund config price
+            });
+            await Card.findByIdAndUpdate(cardId, {
+                $set: { status: "preview", reservedBy: null, reservedAt: null },
+            });
+            throw new Error("Game state changed. Please try again.");
+        }
+
+        // Step 6: Finalize card
+        card.userId = userId;
+        card.gameId = updatedGame._id;
+        card.status = "registered";
+        card.cardNumber = updatedGame.totalCards;
+        card.price = cardPrice;  // 🔧 Save price on card for reference
+        card.registeredAt = new Date();
+        card.reservedBy = null;
+        card.reservedAt = null;
+        await card.save();
+
+        // Step 7: Update players
+        const playerIndex = updatedGame.players.findIndex(
+            (p) => p.userId.toString() === userId,
+        );
+
+        if (playerIndex === -1) {
+            updatedGame.players.push({ userId, cards: [card._id] });
+        } else {
+            updatedGame.players[playerIndex].cards.push(card._id);
+        }
+        await updatedGame.save();
+
+        // Step 8: Create transaction
+        await Transaction.create({
+            userId,
+            type: "card_purchase",
+            amount: -cardPrice,  // 🔧 Use config price
+            gameId: updatedGame.gameId,
+            gameNumber: updatedGame.gameNumber,
+            description: `Card #${card.cardNumber}`,
+            balanceAfter: user.walletBalance,
+            cardId: card._id,
+            status: "completed",
         });
-        throw new Error(`Insufficient balance. Need ${card.price} ETB`);
-      }
 
-      console.log("🟢 [REGISTER] Balance deducted:", user.walletBalance);
+        // Step 9: Start countdown
+        if (updatedGame.players.length === 1) {
+            this.engine.gameFlow.startCountdown(roomId, updatedGame, config);
+        }
 
-      // Step 5: Update game
-      const updatedGame = await Game.findOneAndUpdate(
-        { _id: game._id, status: { $in: ["scheduled", "waiting"] } },
-        {
-          $inc: { totalCards: 1, prizePool: card.price },
-          $set: {
-            timerStartedAt:
-              game.players.length === 0 ? new Date() : game.timerStartedAt,
-            status: game.players.length === 0 ? "waiting" : game.status,
-          },
-        },
-        { new: true },
-      );
+        // Send callback
+        console.log("🟢 [REGISTER] Sending callback...");
+        if (typeof socketCallback === "function") {
+            socketCallback({
+                status: "ok",
+                cardId: card._id,
+                cardNumber: card.cardNumber,
+                newBalance: user.walletBalance,
+            });
+        }
 
-      if (!updatedGame) {
-        await User.findByIdAndUpdate(userId, {
-          $inc: { walletBalance: card.price },
+        // Notify via socket
+        const buyerSocket = this.engine.getUserSocket(userId);
+        if (buyerSocket) {
+            buyerSocket.emit("balanceUpdated", {
+                newBalance: user.walletBalance,
+                cardNumber: card.cardNumber,
+            });
+        }
+
+        // Broadcast to room
+        this.engine.io.to(roomId).emit("cardRegistered", {
+            userId,
+            cardId: card._id,
+            cardNumber: card.cardNumber,
+            displayId: card.displayId,
+            totalCards: updatedGame.totalCards,
+            playerCount: updatedGame.players.length,
+            prizePool: updatedGame.prizePool,
+            timerStartedAt: updatedGame.timerStartedAt,
+            timerDuration: updatedGame.timerDuration,
         });
-        await Card.findByIdAndUpdate(cardId, {
-          $set: { status: "preview", reservedBy: null, reservedAt: null },
-        });
-        throw new Error("Game state changed. Please try again.");
-      }
 
-      // Step 6: Finalize card
-      card.userId = userId;
-      card.gameId = updatedGame._id;
-      card.status = "registered";
-      card.cardNumber = updatedGame.totalCards;
-      card.registeredAt = new Date();
-      card.reservedBy = null;
-      card.reservedAt = null;
-      await card.save();
+        console.log("✅ [REGISTER] Success! Card:", card.cardNumber);
 
-      // Step 7: Update players
-      const playerIndex = updatedGame.players.findIndex(
-        (p) => p.userId.toString() === userId,
-      );
-
-      if (playerIndex === -1) {
-        updatedGame.players.push({ userId, cards: [card._id] });
-      } else {
-        updatedGame.players[playerIndex].cards.push(card._id);
-      }
-      await updatedGame.save();
-
-      // Step 8: Create transaction
-      await Transaction.create({
-        userId,
-        type: "card_purchase",
-        amount: -card.price,
-        gameId: updatedGame.gameId,
-        gameNumber: updatedGame.gameNumber,
-        description: `Card #${card.cardNumber}`,
-        balanceAfter: user.walletBalance,
-        cardId: card._id,
-        status: "completed",
-      });
-
-      // Step 9: Start countdown
-      if (updatedGame.players.length === 1) {
-        this.engine.gameFlow.startCountdown(roomId, updatedGame, config);
-      }
-
-      // 🔧 FIXED: Send callback FIRST (doesn't depend on socket)
-      console.log("🟢 [REGISTER] Sending callback...");
-      if (typeof socketCallback === "function") {
-        socketCallback({
-          status: "ok",
-          cardId: card._id,
-          cardNumber: card.cardNumber,
-          newBalance: user.walletBalance,
-        });
-        console.log("✅ [REGISTER] Callback sent");
-      } else {
-        console.log("⚠️ [REGISTER] No callback provided (older client?)");
-      }
-
-      // Then notify via socket (if available)
-      const buyerSocket = this.engine.getUserSocket(userId);
-      if (buyerSocket) {
-        buyerSocket.emit("balanceUpdated", {
-          newBalance: user.walletBalance,
-          cardNumber: card.cardNumber,
-        });
-      }
-
-      // Broadcast to room
-      this.engine.io.to(roomId).emit("cardRegistered", {
-        userId,
-        cardId: card._id,
-        cardNumber: card.cardNumber,
-        displayId: card.displayId,
-        totalCards: updatedGame.totalCards,
-        playerCount: updatedGame.players.length,
-        prizePool: updatedGame.prizePool,
-        timerStartedAt: updatedGame.timerStartedAt,
-        timerDuration: updatedGame.timerDuration,
-      });
-
-      console.log("✅ [REGISTER] Success! Card:", card.cardNumber);
-
-      return {
-        success: true,
-        cardNumber: card.cardNumber,
-        cardId: card._id,
-        newBalance: user.walletBalance,
-        cardsOwned: registeredCount + 1,
-      };
+        return {
+            success: true,
+            cardNumber: card.cardNumber,
+            cardId: card._id,
+            newBalance: user.walletBalance,
+            cardsOwned: registeredCount + 1,
+        };
     } catch (error) {
-      console.log("❌ [REGISTER] Error:", error.message);
+        console.log("❌ [REGISTER] Error:", error.message);
 
-      // 🔧 FIXED: Send error via callback (doesn't depend on socket)
-      if (typeof socketCallback === "function") {
-        socketCallback({
-          status: "error",
-          message: error.message,
-        });
-      }
+        if (typeof socketCallback === "function") {
+            socketCallback({
+                status: "error",
+                message: error.message,
+            });
+        }
 
-      throw error;
+        throw error;
     } finally {
-      setTimeout(() => {
-        this.purchaseLocks.delete(lockKey);
-      }, 1000);
+        setTimeout(() => {
+            this.purchaseLocks.delete(lockKey);
+        }, 1000);
     }
-  }
+}
 
   // ... rest of the methods stay the same ...
   async previewCards(roomId, userId, quantity = 1) {

@@ -135,7 +135,9 @@ function validateLineBasedRule(rule, effectiveMarkedSet, markedCells) {
   const completedLines = [];
   const lineDirections = cfg.lineDirections || ['horizontal', 'vertical', 'diagonal'];
   
-  // Check rows
+  // ══════════════════════════════════════
+  // CHECK ROWS
+  // ══════════════════════════════════════
   if (lineDirections.includes('horizontal')) {
     for (let r = 0; r < gridSize; r++) {
       let complete = true;
@@ -148,7 +150,9 @@ function validateLineBasedRule(rule, effectiveMarkedSet, markedCells) {
     }
   }
   
-  // Check columns
+  // ══════════════════════════════════════
+  // CHECK COLUMNS
+  // ══════════════════════════════════════
   if (lineDirections.includes('vertical')) {
     for (let c = 0; c < gridSize; c++) {
       let complete = true;
@@ -161,7 +165,9 @@ function validateLineBasedRule(rule, effectiveMarkedSet, markedCells) {
     }
   }
   
-  // Check diagonals
+  // ══════════════════════════════════════
+  // CHECK DIAGONALS
+  // ══════════════════════════════════════
   if (lineDirections.includes('diagonal')) {
     let d1Complete = true;
     const d1Cells = [];
@@ -180,11 +186,14 @@ function validateLineBasedRule(rule, effectiveMarkedSet, markedCells) {
     if (d2Complete) completedLines.push({ type: 'diagonal', index: 2, cells: d2Cells });
   }
   
-  // Check squares
+  // ══════════════════════════════════════
+  // CHECK SQUARES (2x2 only by default)
+  // ══════════════════════════════════════
   let squaresFound = 0;
   if (lineDirections.includes('square')) {
     const minSize = cfg.squareMinSize || 2;
-    const maxSize = cfg.squareMaxSize || 5;
+    const maxSize = cfg.squareMaxSize || 2; // Default to 2x2 only
+    
     for (let size = minSize; size <= maxSize; size++) {
       for (let r = 0; r <= gridSize - size; r++) {
         for (let c = 0; c <= gridSize - size; c++) {
@@ -197,20 +206,27 @@ function validateLineBasedRule(rule, effectiveMarkedSet, markedCells) {
             }
             if (!complete) break;
           }
-          if (complete) { squaresFound++; completedLines.push({ type: 'square', size, row: r, col: c, cells }); }
+          if (complete) {
+            squaresFound++;
+            completedLines.push({ type: 'square', size, row: r, col: c, cells });
+          }
         }
       }
     }
   }
   
-  // Check rectangles
+  // ══════════════════════════════════════
+  // CHECK RECTANGLES (3x2 by default)
+  // ══════════════════════════════════════
   let rectanglesFound = 0;
   if (lineDirections.includes('rectangle')) {
-    const minW = cfg.rectMinWidth || 2, maxW = cfg.rectMaxWidth || 5;
-    const minH = cfg.rectMinHeight || 2, maxH = cfg.rectMaxHeight || 5;
+    const minW = cfg.rectMinWidth || 3;  // Default 3 wide
+    const maxW = cfg.rectMaxWidth || 3;
+    const minH = cfg.rectMinHeight || 2; // Default 2 tall
+    const maxH = cfg.rectMaxHeight || 2;
+    
     for (let w = minW; w <= maxW; w++) {
       for (let h = minH; h <= maxH; h++) {
-        if (w === h) continue;
         for (let r = 0; r <= gridSize - h; r++) {
           for (let c = 0; c <= gridSize - w; c++) {
             let complete = true;
@@ -222,42 +238,144 @@ function validateLineBasedRule(rule, effectiveMarkedSet, markedCells) {
               }
               if (!complete) break;
             }
-            if (complete) { rectanglesFound++; completedLines.push({ type: 'rectangle', width: w, height: h, row: r, col: c, cells }); }
+            if (complete) {
+              rectanglesFound++;
+              completedLines.push({ type: 'rectangle', width: w, height: h, row: r, col: c, cells });
+            }
           }
         }
       }
     }
   }
   
-  // Count by type
-  const rowsFound = completedLines.filter(l => l.type === 'horizontal').length;
-  const colsFound = completedLines.filter(l => l.type === 'vertical').length;
-  const diagsFound = completedLines.filter(l => l.type === 'diagonal').length;
+  // ══════════════════════════════════════
+  // COUNT BY TYPE
+  // ══════════════════════════════════════
+  let rowsFound = completedLines.filter(l => l.type === 'horizontal').length;
+  let colsFound = completedLines.filter(l => l.type === 'vertical').length;
+  let diagsFound = completedLines.filter(l => l.type === 'diagonal').length;
   let totalLines = rowsFound + colsFound + diagsFound + squaresFound + rectanglesFound;
   
-  // Exact/max checks
-  if (cfg.exactRows !== null && rowsFound !== cfg.exactRows) return { valid: false, message: `Need exactly ${cfg.exactRows} rows, found ${rowsFound}` };
-  if (cfg.exactColumns !== null && colsFound !== cfg.exactColumns) return { valid: false, message: `Need exactly ${cfg.exactColumns} columns, found ${colsFound}` };
-  if (cfg.exactDiagonals !== null && diagsFound !== cfg.exactDiagonals) return { valid: false, message: `Need exactly ${cfg.exactDiagonals} diagonals, found ${diagsFound}` };
-  if (cfg.exactSquares !== null && squaresFound !== cfg.exactSquares) return { valid: false, message: `Need exactly ${cfg.exactSquares} squares, found ${squaresFound}` };
-  if (cfg.exactRectangles !== null && rectanglesFound !== cfg.exactRectangles) return { valid: false, message: `Need exactly ${cfg.exactRectangles} rectangles, found ${rectanglesFound}` };
+  // ══════════════════════════════════════
+  // EXACT CHECKS (for all types)
+  // ══════════════════════════════════════
+  if (cfg.exactRows !== null && rowsFound !== cfg.exactRows)
+    return { valid: false, message: `Need exactly ${cfg.exactRows} rows, found ${rowsFound}` };
+  if (cfg.exactColumns !== null && colsFound !== cfg.exactColumns)
+    return { valid: false, message: `Need exactly ${cfg.exactColumns} columns, found ${colsFound}` };
+  if (cfg.exactDiagonals !== null && diagsFound !== cfg.exactDiagonals)
+    return { valid: false, message: `Need exactly ${cfg.exactDiagonals} diagonals, found ${diagsFound}` };
+  if (cfg.exactSquares !== null && squaresFound !== cfg.exactSquares)
+    return { valid: false, message: `Need exactly ${cfg.exactSquares} squares, found ${squaresFound}` };
+  if (cfg.exactRectangles !== null && rectanglesFound !== cfg.exactRectangles)
+    return { valid: false, message: `Need exactly ${cfg.exactRectangles} rectangles, found ${rectanglesFound}` };
   
-  if (cfg.maxRows !== null && rowsFound > cfg.maxRows) return { valid: false, message: `Maximum ${cfg.maxRows} rows allowed, found ${rowsFound}` };
-  if (cfg.maxColumns !== null && colsFound > cfg.maxColumns) return { valid: false, message: `Maximum ${cfg.maxColumns} columns allowed, found ${colsFound}` };
-  if (cfg.maxDiagonals !== null && diagsFound > cfg.maxDiagonals) return { valid: false, message: `Maximum ${cfg.maxDiagonals} diagonals allowed, found ${diagsFound}` };
-  if (cfg.maxSquares !== null && squaresFound > cfg.maxSquares) return { valid: false, message: `Maximum ${cfg.maxSquares} squares allowed, found ${squaresFound}` };
-  if (cfg.maxRectangles !== null && rectanglesFound > cfg.maxRectangles) return { valid: false, message: `Maximum ${cfg.maxRectangles} rectangles allowed, found ${rectanglesFound}` };
+  // ══════════════════════════════════════
+  // MAX CHECKS (for all types)
+  // ══════════════════════════════════════
+  if (cfg.maxRows !== null && rowsFound > cfg.maxRows)
+    return { valid: false, message: `Maximum ${cfg.maxRows} rows, found ${rowsFound}` };
+  if (cfg.maxColumns !== null && colsFound > cfg.maxColumns)
+    return { valid: false, message: `Maximum ${cfg.maxColumns} columns, found ${colsFound}` };
+  if (cfg.maxDiagonals !== null && diagsFound > cfg.maxDiagonals)
+    return { valid: false, message: `Maximum ${cfg.maxDiagonals} diagonals, found ${diagsFound}` };
+  if (cfg.maxSquares !== null && squaresFound > cfg.maxSquares)
+    return { valid: false, message: `Maximum ${cfg.maxSquares} squares, found ${squaresFound}` };
+  if (cfg.maxRectangles !== null && rectanglesFound > cfg.maxRectangles)
+    return { valid: false, message: `Maximum ${cfg.maxRectangles} rectangles, found ${rectanglesFound}` };
   
-  // Final check
-  const totalMarked = markedCells ? markedCells.length : 0;
-  let cornersOk = true;
-  if (cfg.cornersRequired) {
-    cornersOk = effectiveMarkedSet.has('0,0') && effectiveMarkedSet.has('0,4') && effectiveMarkedSet.has('4,0') && effectiveMarkedSet.has('4,4');
+
+ // ══════════════════════════════════════
+// OVERLAPPING CHECK - FIXED
+// ══════════════════════════════════════
+if (cfg.allowOverlapping === false) {
+    const uniqueLines = [];
+    const usedCells = new Set(); // Track ALL used cells (any type)
+    
+    for (const line of completedLines) {
+      const lineCellKeys = line.cells.map(([r, c]) => `${r},${c}`);
+      
+      // Check if ANY cell is already used by ANY other line
+      const hasOverlap = lineCellKeys.some(key => usedCells.has(key));
+      
+      if (!hasOverlap) {
+        uniqueLines.push(line);
+        // Mark all cells as used
+        lineCellKeys.forEach(key => usedCells.add(key));
+      }
+    }
+    
+    // Recalculate all counts with unique lines only
+    rowsFound = uniqueLines.filter(l => l.type === 'horizontal').length;
+    colsFound = uniqueLines.filter(l => l.type === 'vertical').length;
+    diagsFound = uniqueLines.filter(l => l.type === 'diagonal').length;
+    squaresFound = uniqueLines.filter(l => l.type === 'square').length;
+    rectanglesFound = uniqueLines.filter(l => l.type === 'rectangle').length;
+    totalLines = rowsFound + colsFound + diagsFound + squaresFound + rectanglesFound;
+}
+  
+  // ══════════════════════════════════════
+  // INTERSECTION CHECK (applies to ALL types)
+  // ══════════════════════════════════════
+  if (cfg.linesMustIntersect && totalLines > 1) {
+    const intersectionPoints = {};
+    completedLines.forEach((line, i) => {
+      line.cells.forEach(([r, c]) => {
+        const key = `${r},${c}`;
+        if (!intersectionPoints[key]) intersectionPoints[key] = [];
+        intersectionPoints[key].push(i);
+      });
+    });
+    
+    const commonIntersections = Object.entries(intersectionPoints)
+      .filter(([_, lines]) => lines.length >= totalLines);
+    
+    if (commonIntersections.length === 0) {
+      return { valid: false, message: 'Lines must intersect at a common point' };
+    }
+    
+    if (cfg.intersectionPoint?.row !== null && cfg.intersectionPoint?.col !== null) {
+      const key = `${cfg.intersectionPoint.row},${cfg.intersectionPoint.col}`;
+      if (!intersectionPoints[key] || intersectionPoints[key].length < totalLines) {
+        return { valid: false, message: `Lines must intersect at row ${cfg.intersectionPoint.row}, col ${cfg.intersectionPoint.col}` };
+      }
+    }
   }
   
+  if (cfg.linesMustNotIntersect) {
+    const cellUsageCount = {};
+    completedLines.forEach(line => {
+      line.cells.forEach(([r, c]) => {
+        const key = `${r},${c}`;
+        cellUsageCount[key] = (cellUsageCount[key] || 0) + 1;
+      });
+    });
+    const overlaps = Object.entries(cellUsageCount).filter(([_, count]) => count > 1);
+    if (overlaps.length > 0) {
+      return { valid: false, message: `Lines must not share cells. Found ${overlaps.length} shared cells.` };
+    }
+  }
+  
+  // ══════════════════════════════════════
+  // FREE SPACE CHECK
+  // ══════════════════════════════════════
   if (cfg.freeSpaceRequiredForWin && !effectiveMarkedSet.has('2,2')) {
     return { valid: false, message: 'Free space must be included in win' };
   }
+  
+  // ══════════════════════════════════════
+  // CORNERS CHECK
+  // ══════════════════════════════════════
+  let cornersOk = true;
+  if (cfg.cornersRequired) {
+    cornersOk = effectiveMarkedSet.has('0,0') && effectiveMarkedSet.has('0,4') && 
+                effectiveMarkedSet.has('4,0') && effectiveMarkedSet.has('4,4');
+  }
+  
+  // ══════════════════════════════════════
+  // FINAL WIN CHECK
+  // ══════════════════════════════════════
+  const totalMarked = markedCells ? markedCells.length : 0;
   
   const meetsMinimums = 
     rowsFound >= (cfg.minRows || 0) &&
@@ -272,8 +390,8 @@ function validateLineBasedRule(rule, effectiveMarkedSet, markedCells) {
   return {
     valid: meetsMinimums,
     message: meetsMinimums 
-      ? `Valid! ${totalLines} lines (${rowsFound}R ${colsFound}C ${diagsFound}D ${squaresFound}Sq ${rectanglesFound}Re)`
-      : `Need ${cfg.linesToWin} lines. Found: ${rowsFound}R ${colsFound}C ${diagsFound}D ${squaresFound}Sq ${rectanglesFound}Re = ${totalLines} total`,
+      ? `✅ Valid! ${totalLines} lines (${rowsFound}R ${colsFound}C ${diagsFound}D ${squaresFound}Sq ${rectanglesFound}Re)`
+      : `❌ Need ${cfg.linesToWin} total. Found: ${rowsFound}R ${colsFound}C ${diagsFound}D ${squaresFound}Sq ${rectanglesFound}Re = ${totalLines}`,
     details: { rowsFound, colsFound, diagsFound, squaresFound, rectanglesFound, totalLines, totalMarked, cornersOk }
   };
 }
