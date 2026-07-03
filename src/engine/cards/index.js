@@ -168,9 +168,20 @@ async registerCard(roomId, userId, cardId, socketCallback) {
         });
 
         // Step 9: Start countdown
-        if (updatedGame.players.length === 1) {
-            this.engine.gameFlow.startCountdown(roomId, updatedGame, config);
-        }
+        // Step 9: Start countdown or start immediately
+const config2 = await GameConfig.findOne({ roomId }).lean();
+const minPlayers = config2?.minPlayersToStart || 1;
+
+if (updatedGame.players.length === 1) {
+    if (minPlayers <= 1) {
+        // 🔧 Single player game - start immediately!
+        console.log('🚀 Single player game - starting immediately!');
+        this.engine.gameFlow.startGame(roomId, updatedGame, config);
+    } else {
+        // Need more players - start countdown
+        this.engine.gameFlow.startCountdown(roomId, updatedGame, config);
+    }
+}
 
         // Send callback
         console.log("🟢 [REGISTER] Sending callback...");
