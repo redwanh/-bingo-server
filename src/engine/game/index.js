@@ -395,48 +395,53 @@ drawNumbers(roomId, game, config) {
     }
     
     // Process winners
-    if (winners.length > 0) {
-      const commissionRate = config?.commissionPercentage || 10;
-      const comm = (game.prizePool * commissionRate) / 100;
-      const ppw = (game.prizePool - comm) / winners.length;
-      
-      const userUpdates = [];
-      const transactionOps = [];
-      const winnerEntries = [];
-      
-      for (const { card, winType } of winners) {
+ // Process winners - ADD winning numbers extraction
+if (winners.length > 0) {
+    const commissionRate = config?.commissionPercentage || 10;
+    const comm = (game.prizePool * commissionRate) / 100;
+    const ppw = (game.prizePool - comm) / winners.length;
+    
+    const userUpdates = [];
+    const transactionOps = [];
+    const winnerEntries = [];
+    
+    for (const { card, winType } of winners) {
         userUpdates.push({
-          updateOne: {
-            filter: { _id: card.userId._id || card.userId },
-            update: { $inc: { walletBalance: ppw } }
-          }
+            updateOne: {
+                filter: { _id: card.userId._id || card.userId },
+                update: { $inc: { walletBalance: ppw } }
+            }
         });
         
-        // Fetch user after update for balance
         const user = await User.findById(card.userId._id || card.userId);
         
         transactionOps.push({
-          userId: user._id,
-          type: 'prize_win',
-          amount: ppw,
-          gameId: game.gameId,
-          gameNumber: game.gameNumber,
-          description: `Won with ${winType}`,
-          balanceAfter: (user.walletBalance || 0) + ppw
+            userId: user._id,
+            type: 'prize_win',
+            amount: ppw,
+            gameId: game.gameId,
+            gameNumber: game.gameNumber,
+            description: `Won with ${winType}`,
+            balanceAfter: (user.walletBalance || 0) + ppw
         });
         
+        // 🔧 MARK WINNING CELLS on the grid
+        const markedGrid = markWinningCells(card.grid, game.drawnNumbers);
+        
         winnerEntries.push({
-          userId: user._id,
-          cardId: card._id,
-          winType,
-          prizeAmount: ppw,
-          winnerName: user.fullName,
-          winnerPhone: user.phone,
-          cardNumber: card.cardNumber,
-          cardGrid: card.grid,
-          newBalance: (user.walletBalance || 0) + ppw
+            userId: user._id,
+            cardId: card._id,
+            winType,
+            prizeAmount: ppw,
+            winnerName: user.fullName,
+            winnerPhone: user.phone,
+            cardNumber: card.cardNumber,
+            cardGrid: markedGrid,  // 🔧 Use marked grid
+            newBalance: (user.walletBalance || 0) + ppw
         });
-      }
+    }
+    // ... rest
+
       
       // Bulk update user balances
       await User.bulkWrite(userUpdates, { ordered: false });
@@ -588,6 +593,26 @@ drawNumbers(roomId, game, config) {
       }
     }, 1000);
   }
+}
+
+/**
+ * Mark all cells that match drawn numbers
+ */
+function markWinningCells(grid, drawnNumbers) {
+    const drawnSet = new Set(drawnNumbers.map(d => d.number));
+    const markedGrid = {};
+    
+    ['B', 'I', 'N', 'G', 'O'].forEach(col => {
+        if (grid[col]) {
+            markedGrid[col] = grid[col].map(cell => ({
+                ...cell,
+                isMarked: drawnSet.has(cell.number) || cell.number === 0, // Mark drawn numbers + FREE
+                isWinningCell: drawnSet.has(cell.number) && cell.number !== 0 // Highlight non-FREE matches
+            }));
+        }
+    });
+    
+    return markedGrid;
 }
 
 module.exports = GameFlowService;
