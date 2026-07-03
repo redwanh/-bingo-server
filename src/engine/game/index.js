@@ -71,42 +71,45 @@ class GameFlowService {
     this.activeCardCounts.clear();
   }
 
-  startCountdown(roomId, game, config) {
+ startCountdown(roomId, game, config) {
     timerManager.clearTimeout(`countdown_${roomId}`);
     timerManager.clearInterval(`poll_${roomId}`);
 
     const delayMs = config.waitTimeSeconds * 1000;
-    const adjustedDelay = Math.max(0, delayMs - 1500); // Start 1.5s early to compensate processing
+    // 🔧 Start 2 seconds early to compensate for DB operations
+    const adjustedDelay = Math.max(0, delayMs - 2000);
+    
+    // 🔧 Pre-fetch config and cache it
+    const cachedConfig = config;
     
     timerManager.createTimeout(`countdown_${roomId}`, async () => {
-      const current = await Game.findById(game._id).lean();
-      if (!current || current.status === 'completed') return;
-
+      // 🔧 Single DB call: update status AND fetch in one go
+      const current = await Game.findOneAndUpdate(
+        { _id: game._id, status: { $ne: 'completed' } },
+        { $set: { status: 'in_progress', startTime: new Date() } },
+        { new: true }
+      ).lean();
+      
+      if (!current) return;
+      
       const playerCount = current.players ? current.players.length : 0;
-
-      if (playerCount >= config.minPlayersToStart) {
+      
+      if (playerCount >= cachedConfig.minPlayersToStart) {
         timerManager.clearInterval(`poll_${roomId}`);
         
-        // Update status first
-        await Game.updateOne(
-          { _id: current._id },
-          { $set: { status: 'in_progress', startTime: new Date() } }
-        );
-        
-        // Emit immediately (before other processing)
+        // 🔧 Emit IMMEDIATELY (no await needed)
         this.engine.io.to(roomId).emit('gameStarted', {
-          gameId: current.gameId,
+          gameId: current.gameId || current._id,
           gameNumber: current.gameNumber,
           prizePool: current.prizePool,
           playerCount: current.players?.length || 0,
           totalCards: current.totalCards
         });
-
-        // Fetch full game object for drawNumbers
-        const fullGame = await Game.findById(current._id);
-        this.drawNumbers(roomId, fullGame, config);
         
-      } else if (playerCount === 0 && config.resetOnNoPlayers) {
+        // 🔧 Use the already-fetched game object (no second fetch!)
+        this.drawNumbers(roomId, current, cachedConfig);
+        
+      } else if (playerCount === 0 && cachedConfig.resetOnNoPlayers) {
         await Game.updateOne(
           { _id: current._id },
           { $set: { timerStartedAt: new Date(), status: 'waiting' } }
@@ -114,17 +117,18 @@ class GameFlowService {
         
         this.engine.io.to(roomId).emit('countdownReset', {
           timerStartedAt: new Date(),
-          timerDuration: config.waitTimeSeconds
+          timerDuration: cachedConfig.waitTimeSeconds
         });
         
-        const updatedGame = await Game.findById(current._id);
-        this.startCountdown(roomId, updatedGame, config);
+        // Re-fetch needed here since status changed
+        const updatedGame = await Game.findById(current._id).lean();
+        this.startCountdown(roomId, updatedGame, cachedConfig);
       } else {
-        const updatedGame = await Game.findById(current._id);
-        this.startPlayerPoll(roomId, updatedGame, config);
+        const updatedGame = await Game.findById(current._id).lean();
+        this.startPlayerPoll(roomId, updatedGame, cachedConfig);
       }
     }, adjustedDelay, 'game_countdown');
-  }
+}
 
   startPlayerPoll(roomId, game, config) {
     const pc = this.engine.getPlayerCount(game);
@@ -160,37 +164,41 @@ class GameFlowService {
     }, 3000, 'player_poll');
   }
 
-  async startGame(roomId, game, config) {
+ async startGame(roomId, game, config) {
     timerManager.clearInterval(`poll_${roomId}`);
     
-    // Emit BEFORE save for instant response
+    // 🔧 Update AND emit in parallel
+    const updatePromise = Game.updateOne(
+      { _id: game._id },
+      { $set: { status: 'in_progress', startTime: new Date() } }
+    );
+    
+    // Emit immediately (don't wait for DB)
     this.engine.io.to(roomId).emit('gameStarted', {
-      gameId: game.gameId,
+      gameId: game.gameId || game._id,
       gameNumber: game.gameNumber,
       prizePool: game.prizePool,
       playerCount: this.engine.getPlayerCount(game),
       totalCards: game.totalCards
     });
     
-    // Save in background
-    game.status = 'in_progress';
-    game.startTime = new Date();
-    await game.save();
-
+    // 🔧 Start drawing immediately (don't wait for DB update)
     this.drawNumbers(roomId, game, config);
-  }
+    
+    // Let the DB update complete in background
+    await updatePromise;
+}
 
-  drawNumbers(roomId, game, config) {
+ drawNumbers(roomId, game, config) {
     let idx = 0;
-    const gameId = game._id;
+    const gameId = game._id || game.gameId;
     const gameIdStr = gameId.toString();
     let cachedGame = game;
     let activeCountCache = null;
-    let lastCountCheck = 0;
     
     timerManager.clearInterval(`draw_${roomId}`);
     
-    // Initialize active card count
+    // 🔧 Initialize active card count
     Card.countDocuments({ 
       gameId, status: 'registered', isBlocked: false, bingoCalled: false 
     }).then(count => {
@@ -198,14 +206,47 @@ class GameFlowService {
       this.activeCardCounts.set(gameIdStr, count);
     });
     
+    // 🔧 Draw first number IMMEDIATELY (don't wait for interval)
+    const drawFirstNumber = async () => {
+      if (!game.allNumbers || game.allNumbers.length === 0) return;
+      
+      const num = game.allNumbers[0];
+      const letter = this.engine.getBingoLetter(num);
+      const newNumber = { number: num, letter };
+      
+      // Update cache
+      if (!cachedGame.drawnNumbers) cachedGame.drawnNumbers = [];
+      cachedGame.drawnNumbers.push(newNumber);
+      cachedGame.currentNumber = newNumber;
+      
+      // Emit first number right away
+      this.engine.io.to(roomId).emit('numberDrawn', { 
+        number: num, letter, drawCount: 1, 
+        totalNumbers: cachedGame.allNumbers.length 
+      });
+      
+      idx = 1;
+      
+      // Save in background (fire and forget)
+      Game.updateOne(
+        { _id: gameId },
+        { $set: { currentNumber: newNumber }, $push: { drawnNumbers: newNumber } }
+      ).catch(err => console.error('First draw save error:', err));
+    };
+    
+    // Execute first draw immediately
+    drawFirstNumber();
+    
+    // Then continue with interval for subsequent numbers
     timerManager.createInterval(`draw_${roomId}`, async () => {
-      // 🔧 Only fetch full game every 5 draws or when needed
-      if (idx % 5 === 0 || !cachedGame || idx >= cachedGame.allNumbers.length) {
-        cachedGame = await Game.findById(gameId).lean();
-        if (!cachedGame) {
+      // 🔧 Only fetch full game every 5 draws
+      if (idx % 5 === 0 || !cachedGame) {
+        const fresh = await Game.findById(gameId).lean();
+        if (!fresh) {
           timerManager.clearInterval(`draw_${roomId}`);
           return;
         }
+        cachedGame = fresh;
       }
       
       if (!cachedGame || cachedGame.status === 'completed' || cachedGame.status === 'grace_period') {
@@ -220,59 +261,30 @@ class GameFlowService {
         return;
       }
       
-      // 🔧 Only check active cards every 10 draws (or if count is low)
+      // 🔧 Only check active cards every 10 draws
       if (idx % 10 === 0 || idx === 0 || (activeCountCache !== null && activeCountCache < 5)) {
         const freshCount = await Card.countDocuments({ 
           gameId, status: 'registered', isBlocked: false, bingoCalled: false 
         });
         activeCountCache = freshCount;
         this.activeCardCounts.set(gameIdStr, freshCount);
-        lastCountCheck = idx;
       }
       
+      // All cards blocked check
       if (activeCountCache === 0 && cachedGame.totalCards > 0) {
         timerManager.clearInterval(`draw_${roomId}`);
         
-        // Refund all players
         const cards = await Card.find({ gameId, status: 'registered' });
-        const refundOps = [];
-        const transactionOps = [];
         
-        for (const card of cards) {
-          refundOps.push({
-            updateOne: {
-              filter: { _id: card.userId },
-              update: { $inc: { walletBalance: card.price } }
-            }
-          });
-          
-          transactionOps.push({
-            userId: card.userId,
-            type: 'refund',
-            amount: card.price,
-            gameId: cachedGame.gameId,
-            gameNumber: cachedGame.gameNumber,
-            description: 'Refund - all cards blocked',
-            balanceAfter: 0 // Will be updated
-          });
-        }
-        
-        if (refundOps.length > 0) {
-          await User.bulkWrite(refundOps, { ordered: false });
-        }
-        
-        // Update users and create transactions
         for (const card of cards) {
           const user = await User.findById(card.userId);
           if (user) {
+            user.walletBalance += card.price; 
+            await user.save();
             await Transaction.create({
-              userId: user._id,
-              type: 'refund',
-              amount: card.price,
-              gameId: cachedGame.gameId,
-              gameNumber: cachedGame.gameNumber,
-              description: 'Refund - all cards blocked',
-              balanceAfter: user.walletBalance
+              userId: user._id, type: 'refund', amount: card.price,
+              gameId: cachedGame.gameId, gameNumber: cachedGame.gameNumber,
+              description: 'Refund - all cards blocked', balanceAfter: user.walletBalance
             });
           }
         }
@@ -285,11 +297,8 @@ class GameFlowService {
         await this.resetAllCards(roomId);
         
         this.engine.io.to(roomId).emit('gameEnded', { 
-          gameId: cachedGame._id, 
-          winners: [], 
-          prizePool: cachedGame.prizePool, 
-          reason: 'All cards blocked', 
-          refunded: true 
+          gameId: cachedGame._id, winners: [], prizePool: cachedGame.prizePool, 
+          reason: 'All cards blocked', refunded: true 
         });
         
         this.scheduleNewGame(roomId);
@@ -299,26 +308,18 @@ class GameFlowService {
       // Draw number
       const num = cachedGame.allNumbers[idx];
       const letter = this.engine.getBingoLetter(num);
-      
-      // 🔧 Batch save: only persist to DB every 5 draws
       const newNumber = { number: num, letter };
       
+      // 🔧 Batch save: only persist every 5 draws
       if (idx % 5 === 0) {
         await Game.updateOne(
           { _id: gameId },
-          { 
-            $set: { currentNumber: newNumber },
-            $push: { drawnNumbers: newNumber }
-          }
+          { $set: { currentNumber: newNumber }, $push: { drawnNumbers: newNumber } }
         );
       } else {
-        // Just push without waiting (fire and forget)
         Game.updateOne(
           { _id: gameId },
-          { 
-            $set: { currentNumber: newNumber },
-            $push: { drawnNumbers: newNumber }
-          }
+          { $set: { currentNumber: newNumber }, $push: { drawnNumbers: newNumber } }
         ).catch(err => console.error('Batch save error:', err));
       }
       
@@ -327,95 +328,69 @@ class GameFlowService {
       cachedGame.drawnNumbers.push(newNumber);
       cachedGame.currentNumber = newNumber;
       
-      // Emit immediately (no DB wait)
+      // Emit immediately
       this.engine.io.to(roomId).emit('numberDrawn', { 
-        number: num, 
-        letter, 
-        drawCount: idx + 1, 
+        number: num, letter, drawCount: idx + 1, 
         totalNumbers: cachedGame.allNumbers.length 
       });
       
       // 🔧 OPTIMIZED: Auto-bingo using batch check
-if (config?.autoBingoEnabled && idx >= 4) {
-    const allRegisteredCards = await Card.find({ 
-      gameId, 
-      status: 'registered', 
-      isBlocked: false, 
-      bingoCalled: false 
-    }).lean();
-    
-    if (allRegisteredCards.length > 0) {
-      // 🔧 Use batch check - builds drawnSet ONCE for all cards
-      const results = this.engine.bingo.checkMultipleCards(
-        allRegisteredCards, 
-        cachedGame.drawnNumbers, 
-        config
-      );
-      
-      // Process results
-      for (const { cardId, winType } of results) {
-        if (winType) {
-          const card = allRegisteredCards.find(c => c._id.toString() === cardId.toString());
-          if (!card) continue;
-          
-          // Update card
-          await Card.updateOne(
-            { _id: card._id },
-            { 
-              $set: { 
-                bingoCalled: true, 
-                bingoCallTime: new Date(), 
-                winType 
-              } 
-            }
+      if (config?.autoBingoEnabled && idx >= 4) {
+        const allRegisteredCards = await Card.find({ 
+          gameId, status: 'registered', isBlocked: false, bingoCalled: false 
+        }).lean();
+        
+        if (allRegisteredCards.length > 0) {
+          // Use batch check - builds drawnSet ONCE for all cards
+          const results = this.engine.bingo.checkMultipleCards(
+            allRegisteredCards, 
+            cachedGame.drawnNumbers, 
+            config
           );
           
-          const fullGame = await Game.findById(gameId);
-          
-          if (fullGame.status === 'in_progress') {
-            timerManager.clearInterval(`draw_${roomId}`);
-            
-            await Game.updateOne(
-              { _id: gameId },
-              { 
-                $set: { 
-                  status: 'bingo_called',
-                  gracePeriodEndTime: new Date(Date.now() + (config.gracePeriodSeconds || 10) * 1000)
-                } 
+          for (const { cardId, winType } of results) {
+            if (winType) {
+              const card = allRegisteredCards.find(c => c._id.toString() === cardId.toString());
+              if (!card) continue;
+              
+              await Card.updateOne(
+                { _id: card._id },
+                { $set: { bingoCalled: true, bingoCallTime: new Date(), winType } }
+              );
+              
+              const fullGame = await Game.findById(gameId);
+              
+              if (fullGame.status === 'in_progress') {
+                timerManager.clearInterval(`draw_${roomId}`);
+                
+                await Game.updateOne(
+                  { _id: gameId },
+                  { $set: { status: 'bingo_called', gracePeriodEndTime: new Date(Date.now() + (config.gracePeriodSeconds || 10) * 1000) } }
+                );
+                
+                this.engine.io.to(roomId).emit('firstBingo', { 
+                  userId: card.userId, cardId: card._id, cardNumber: card.cardNumber, 
+                  winType, autoBingo: true 
+                });
+                
+                timerManager.createTimeout(`grace_${roomId}`, 
+                  () => this.endGracePeriod(roomId, gameId), 
+                  (config.gracePeriodSeconds || 10) * 1000, 'grace_period');
+                return;
+              } else {
+                this.engine.io.to(roomId).emit('additionalBingo', { 
+                  userId: card.userId, cardId: card._id, cardNumber: card.cardNumber, 
+                  winType, autoBingo: true 
+                });
               }
-            );
-            
-            this.engine.io.to(roomId).emit('firstBingo', { 
-              userId: card.userId, 
-              cardId: card._id, 
-              cardNumber: card.cardNumber, 
-              winType, 
-              autoBingo: true 
-            });
-            
-            timerManager.createTimeout(`grace_${roomId}`, 
-              () => this.endGracePeriod(roomId, gameId), 
-              (config.gracePeriodSeconds || 10) * 1000, 
-              'grace_period'
-            );
-            return;
-          } else {
-            this.engine.io.to(roomId).emit('additionalBingo', { 
-              userId: card.userId, 
-              cardId: card._id, 
-              cardNumber: card.cardNumber, 
-              winType, 
-              autoBingo: true 
-            });
+            }
           }
         }
       }
-    }
-}
       
       idx++;
     }, config.drawIntervalSeconds * 1000, 'number_draw');
-  }
+}
 
   async endGracePeriod(roomId, gameId) {
     const game = await Game.findById(gameId).lean();
