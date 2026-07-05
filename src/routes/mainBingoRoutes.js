@@ -506,6 +506,64 @@ router.delete('/cards/:id', protect, async (req, res) => {
   }
 });
 
+// TEMPORARY: Seed cards (remove after use)
+router.get('/seed-cards', async (req, res) => {
+  try {
+    const Card = require('../models/Card');
+    const CardGenerator = require('../services/cardGenerator');
+    
+    // Check if already seeded
+    const count = await Card.countDocuments({ status: 'preview' });
+    if (count >= 1000) {
+      return res.json({ message: `Already seeded: ${count} cards` });
+    }
+    
+    // Create 1000 preview cards (IDs 20000-20999)
+    const previewCount = 1000;
+    const BATCH = 500;
+    let inserted = 0;
+    
+    for (let b = 0; b < Math.ceil(previewCount / BATCH); b++) {
+      const cards = [];
+      const start = b * BATCH + 1;
+      const end = Math.min((b + 1) * BATCH, previewCount);
+      
+      for (let i = start; i <= end; i++) {
+        const card = CardGenerator.generateCard(i);
+        card.displayId = 20000 + i - 1;
+        card.status = 'preview';
+        card.userId = null;
+        card.gameId = null;
+        cards.push(card);
+      }
+      
+      await Card.insertMany(cards, { ordered: false });
+      inserted += cards.length;
+    }
+    
+    // Create 400 available cards (IDs 10000-10399)
+    const availCount = 400;
+    const availCards = [];
+    for (let i = 0; i < availCount; i++) {
+      const card = CardGenerator.generateCard(i + 1);
+      card.displayId = 10000 + i;
+      card.status = 'available';
+      card.userId = null;
+      card.gameId = null;
+      availCards.push(card);
+    }
+    await Card.insertMany(availCards, { ordered: false });
+    
+    res.json({ 
+      success: true, 
+      previewCards: previewCount, 
+      availableCards: availCount 
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // POST /api/main-bingo/cards/cancel - Bulk reset cards
 router.post('/cards/cancel', protect, async (req, res) => {
   try {
