@@ -329,46 +329,6 @@ exports.login = async (req, res) => {
 };
 
 // Add refresh token endpoint
-exports.refreshToken = async (req, res) => {
-  try {
-    const { refreshToken } = req.body;
-    if (!refreshToken) {
-      return res.status(401).json({ 
-        success: false, 
-        message: 'Refresh token required' 
-      });
-    }
-    
-    const decoded = verifyRefreshToken(refreshToken);
-    const user = await User.findById(decoded.id);
-    if (!user) {
-      return res.status(401).json({ 
-        success: false, 
-        message: 'User not found' 
-      });
-    }
-    
-    // Generate new tokens
-    const newAccessToken = generateAccessToken(user._id, user.role);
-    const newRefreshToken = generateRefreshToken(user);
-    
-    // Update session token
-    user.currentSessionToken = newAccessToken;
-    await user.save();
-    
-    res.json({
-      success: true,
-      accessToken: newAccessToken,
-      refreshToken: newRefreshToken
-    });
-  } catch (error) {
-    console.error('Refresh token error:', error);
-    res.status(401).json({ 
-      success: false, 
-      message: 'Invalid refresh token' 
-    });
-  }
-};
 
 exports.refreshToken = async (req, res, next) => {
   try {
