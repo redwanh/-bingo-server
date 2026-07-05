@@ -136,6 +136,8 @@ async function startServer() {
 
         // Initialize game engines
         const mainBingoEngine = new MainBingoEngine(io);
+console.log('🔍 MainBingoEngine created:', !!mainBingoEngine);
+console.log('🔍 drawNumbers method:', typeof mainBingoEngine.drawNumbers);
         const gameEngine = new GameEngine(io);
 
         app.set('gameEngine', gameEngine);
