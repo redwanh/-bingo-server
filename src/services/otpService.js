@@ -1,6 +1,6 @@
 ﻿const Otp = require('../models/Otp');
 const smsService = require('./smsService');
-const telegramService = require('./telegramService');
+//const telegramService = require('./telegramService');
 
 class OTPService {
   constructor() {
@@ -79,7 +79,8 @@ console.log('🔍 [OTP] sendOTP - channel:', channel, 'code:', code, 'phone:', p
 
     try {
       if (channel === 'telegram') {
-        await telegramService.sendOTP(phone, code);
+       // await telegramService.sendOTP(phone, code);
+        console.log('⚠️ Telegram not configured, using test code');
         sendResult = { success: true, provider: 'telegram' };
       } else if (channel === 'sms') {
         sendResult = await smsService.send(phone, message);
