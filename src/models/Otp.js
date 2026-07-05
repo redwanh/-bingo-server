@@ -8,6 +8,11 @@ const otpSchema = new mongoose.Schema({
   attempts: { type: Number, default: 0, max: 5 },
   expiresAt: { type: Date, required: true, index: true },
   smsProvider: { type: String },
+  channel: { 
+  type: String, 
+  enum: ['test', 'sms', 'telegram', 'email'], 
+  default: 'test' 
+},
   smsSent: { type: Boolean, default: false },
 }, { timestamps: true });
 

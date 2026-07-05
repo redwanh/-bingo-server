@@ -1,4 +1,4 @@
-const Card = require("../../models/Card");
+﻿const Card = require("../../models/Card");
 const Game = require("../../models/Game");
 const GameConfig = require("../../models/GameConfig");
 const User = require("../../models/User");

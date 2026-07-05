@@ -4,7 +4,8 @@ const {
   sendOTP, sendRegistrationOTP, sendLoginOTP,
   verifyOTP, getOTPStatus, lockAccount,
   register, login, refreshToken,
-  forgotPassword, resetPassword, logout, getMe
+  forgotPassword, resetPassword, logout, getMe,
+  googleAuth  // ← ADD THIS
 } = require('../controllers/authController');
 const { protect } = require('../middleware/auth');
 const validate = require('../middleware/validation');
@@ -19,6 +20,7 @@ router.post('/send-registration-otp', otpValidation, validate, sendRegistrationO
 router.post('/send-login-otp', otpValidation, validate, sendLoginOTP);
 router.post('/verify-otp', verifyOtpValidation, validate, verifyOTP);
 router.get('/otp-status/:phone', getOTPStatus);
+router.post('/google', googleAuth);
 
 // Account lock
 router.post('/lock-account', otpValidation, validate, lockAccount);

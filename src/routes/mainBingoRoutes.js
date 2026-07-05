@@ -24,19 +24,30 @@ router.post('/topup', protect, ctrl.topupBalance);
 // server/routes/mainBingo.js
 router.post('/register-cards', protect, ctrl.registerCards);
 // BINGO call
+// BINGO call
 router.post('/bingo', protect, async (req, res) => {
   try {
+    console.log('🔴 [BINGO] ========== BINGO CALL START ==========');
+    console.log('🔴 [BINGO] User:', req.user.id);
+    console.log('🔴 [BINGO] Card:', req.body.cardId);
+    
     const MainBingoGame = require('../models/MainBingoGame');
     const MainBingoRule = require('../models/MainBingoRule');
+    const MainBingoConfig = require('../models/MainBingoConfig');
     const Card = require('../models/Card');
     const User = require('../models/User');
     
     const game = await MainBingoGame.getActiveGame();
+    console.log('🔴 [BINGO] Game status:', game?.status, 'Game ID:', game?._id);
+    
     if (!game || (game.status !== 'in_progress' && game.status !== 'bingo_called')) {
+      console.log('🔴 [BINGO] ❌ Game not in progress');
       return res.status(400).json({ error: 'Game not in progress' });
     }
     
     const card = await Card.findOne({ _id: req.body.cardId, userId: req.user.id, gameId: game._id });
+    console.log('🔴 [BINGO] Card found:', !!card, 'Blocked:', card?.isBlocked, 'Already called:', card?.bingoCalled);
+    
     if (!card) return res.status(400).json({ error: 'Card not found' });
     if (card.isBlocked) return res.status(400).json({ error: 'Card blocked' });
     if (card.bingoCalled) return res.status(400).json({ error: 'Already called' });
@@ -55,9 +66,12 @@ router.post('/bingo', protect, async (req, res) => {
       }
     }
     
-    const winType = validateMainBingoWin(rule, card);
+    const mainBingoEngine = req.app.get('mainBingoEngine');
+    const winType = await mainBingoEngine.checkWin(rule, card, game._id.toString(), config);
+    console.log('🔴 [BINGO] Win type:', winType, 'Has invalid:', hasInvalid);
     
     if (!winType || hasInvalid) {
+      console.log('🔴 [BINGO] ❌ FALSE BINGO');
       card.isBlocked = true;
       card.blockReason = 'no_win';
       await card.save();
@@ -66,6 +80,8 @@ router.post('/bingo', protect, async (req, res) => {
       await game.save();
       return res.json({ success: false, falseBingo: true, message: 'False Bingo!' });
     }
+    
+    console.log('🔴 [BINGO] ✅ VALID BINGO!');
     
     card.bingoCalled = true;
     card.bingoCallTime = new Date();
@@ -77,19 +93,94 @@ router.post('/bingo', protect, async (req, res) => {
     
     const user = await User.findById(req.user.id).select('fullName phone');
     const io = req.app.get('io');
+    console.log('🔴 [BINGO] IO exists:', !!io);
     
     if (game.status === 'in_progress') {
+      console.log('🔴 [BINGO] First BINGO! Stopping draws...');
+      
+      // Stop drawing
+      if (global.drawIntervals && global.drawIntervals[game._id.toString()]) {
+        clearInterval(global.drawIntervals[game._id.toString()]);
+        delete global.drawIntervals[game._id.toString()];
+        console.log('🔴 [BINGO] Draw interval cleared');
+      }
+      
       game.status = 'bingo_called';
-      game.gracePeriodEndTime = new Date(Date.now() + 20000);
       await game.save();
-      if (io) io.emit('mainBingoFirstBingo', { userId: req.user.id, cardId: req.body.cardId, cardNumber: card.cardNumber, winType, winnerName: user.fullName, winnerPhone: user.phone, cardGrid: card.grid });
+      console.log('🔴 [BINGO] Status set to: bingo_called');
+      
+      // Emit to ALL players
+      io.to('main-bingo-room').emit('mainBingoFirstBingo', { 
+        userId: req.user.id, 
+        cardId: req.body.cardId, 
+        cardNumber: card.cardNumber, 
+        winType, 
+        winnerName: user.fullName
+      });
+      console.log('🔴 [BINGO] ✅ Emitted mainBingoFirstBingo to room');
+      
+      // Auto grace period after 3 seconds
+      const config = await MainBingoConfig.findById(game.configId);
+      const graceSeconds = config?.gracePeriodSeconds || 10;
+      console.log('🔴 [BINGO] Grace period seconds:', graceSeconds);
+      
+      setTimeout(async () => {
+        try {
+          console.log('🔴 [BINGO] ⏰ Starting grace period...');
+          const current = await MainBingoGame.findById(game._id);
+          console.log('🔴 [BINGO] Current status:', current?.status);
+          
+          if (current && current.status === 'bingo_called') {
+            current.status = 'grace_period';
+            current.gracePeriodEndTime = new Date(Date.now() + graceSeconds * 1000);
+            await current.save();
+            console.log('🔴 [BINGO] Status set to: grace_period');
+            
+            io.to('main-bingo-room').emit('mainBingoGracePeriod', {
+              seconds: graceSeconds,
+              endTime: current.gracePeriodEndTime
+            });
+            console.log('🔴 [BINGO] ✅ Emitted mainBingoGracePeriod to room');
+            
+            // End game after grace period
+            setTimeout(async () => {
+              try {
+                console.log('🔴 [BINGO] 🏁 Ending game...');
+                const MainBingoEngine = require('../services/MainBingoEngine');
+                const engine = new MainBingoEngine(io);
+                await engine.endGracePeriod(game._id);
+                console.log('🔴 [BINGO] ✅ Game ended');
+              } catch (err) {
+                console.error('🔴 [BINGO] ❌ endGracePeriod error:', err);
+              }
+            }, graceSeconds * 1000);
+          } else {
+            console.log('🔴 [BINGO] ⚠️ Status changed, skipping grace period');
+          }
+        } catch (err) {
+          console.error('🔴 [BINGO] ❌ Grace period error:', err);
+        }
+      }, 3000);
+      
     } else {
+      console.log('🔴 [BINGO] Additional BINGO during grace period');
       await game.save();
-      if (io) io.emit('mainBingoAdditionalBingo', { userId: req.user.id, cardId: req.body.cardId, cardNumber: card.cardNumber, winType, winnerName: user.fullName, winnerPhone: user.phone, cardGrid: card.grid });
+      io.to('main-bingo-room').emit('mainBingoAdditionalBingo', { 
+        userId: req.user.id, 
+        cardId: req.body.cardId, 
+        cardNumber: card.cardNumber, 
+        winType, 
+        winnerName: user.fullName
+      });
+      console.log('🔴 [BINGO] ✅ Emitted mainBingoAdditionalBingo');
     }
     
+    console.log('🔴 [BINGO] ========== BINGO CALL END ==========');
     res.json({ success: true, winType });
-  } catch (e) { res.status(400).json({ error: e.message }); }
+  } catch (e) { 
+    console.error('🔴 [BINGO] ❌ ERROR:', e.message);
+    res.status(400).json({ error: e.message }); 
+  }
 });
 // server/routes/mainBingo.js
 router.get('/debug-cards', protect, async (req, res) => {

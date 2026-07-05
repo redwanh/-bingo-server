@@ -5,6 +5,7 @@ const otpService = require('../services/otpService');
 const { generateAccessToken, generateRefreshToken, verifyRefreshToken } = require('../utils/jwt');
 const AppError = require('../utils/AppError');
 
+
 // Send OTP for registration (checks number is NEW)
 exports.sendRegistrationOTP = async (req, res, next) => {
   try {
@@ -15,7 +16,9 @@ exports.sendRegistrationOTP = async (req, res, next) => {
       return next(new AppError('PHONE_EXISTS', 400));
     }
     
-    const result = await otpService.sendOTP(phone, 'registration');
+   const { channel } = req.body;
+console.log('🔍 [AUTH] Channel from request:', channel);
+const result = await otpService.sendOTP(phone, 'registration', channel || 'test');
     res.status(200).json({ 
       success: true, 
       ...result,
@@ -60,7 +63,9 @@ exports.sendLoginOTP = async (req, res, next) => {
       await user.save();
     }
     
-    const result = await otpService.sendOTP(phone, 'reset_password');
+   const { channel } = req.body;
+console.log('🔍 [AUTH] sendLoginOTP - channel:', channel);
+const result = await otpService.sendOTP(phone, 'reset_password', channel || 'test');
     res.status(200).json({ 
       success: true, 
       ...result,
@@ -72,6 +77,77 @@ exports.sendLoginOTP = async (req, res, next) => {
   }
 };
 
+
+const { OAuth2Client } = require('google-auth-library');
+const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
+
+exports.googleAuth = async (req, res) => {
+  try {
+    const { code, phone, fullName, password } = req.body;
+    
+    if (!code) {
+      return res.status(400).json({ success: false, message: 'No code provided' });
+    }
+    
+    const googleClient = new OAuth2Client(
+      process.env.GOOGLE_CLIENT_ID,
+      process.env.GOOGLE_CLIENT_SECRET,
+      'http://localhost:3001'
+    );
+    
+    const { tokens } = await googleClient.getToken(code);
+    const ticket = await googleClient.verifyIdToken({
+      idToken: tokens.id_token,
+      audience: process.env.GOOGLE_CLIENT_ID,
+    });
+    
+    const payload = ticket.getPayload();
+    const email = payload.email;
+    const name = payload.name;
+    const googleId = payload.sub;
+    
+    let user = await User.findOne({ $or: [{ email }, { phone }] });
+    let isNewUser = false;
+    
+    if (!user) {
+      user = await User.create({
+        email,
+        fullName: fullName || name,
+        phone: phone || 'google_' + googleId.substring(0, 10),
+        googleId,
+        password: password || 'google_' + Date.now().toString(36),
+        isVerified: true,
+        username: email.split('@')[0] + '_' + Date.now().toString(36),
+      });
+      isNewUser = true;
+    }
+    
+    const accessToken = generateAccessToken(user._id, user.role);
+    const refreshToken = generateRefreshToken(user._id);
+    
+    user.currentSessionToken = accessToken;
+    user.lastLogin = new Date();
+    await user.save();
+    
+    res.json({
+      success: true,
+      isNewUser,
+      accessToken,
+      refreshToken,
+      user: {
+        _id: user._id,
+        fullName: user.fullName,
+        email: user.email,
+        phone: user.phone,
+        role: user.role,
+        balance: user.walletBalance || user.balance || 0,
+      }
+    });
+  } catch (error) {
+    console.error('Google auth error:', error.message);
+    res.status(401).json({ success: false, message: 'Google authentication failed' });
+  }
+};
 // Generic send OTP
 exports.sendOTP = async (req, res, next) => {
   try {

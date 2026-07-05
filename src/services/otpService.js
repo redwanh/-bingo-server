@@ -1,31 +1,29 @@
-﻿// services/otpService.js
-const Otp = require('../models/Otp');
+﻿const Otp = require('../models/Otp');
 const smsService = require('./smsService');
+const telegramService = require('./telegramService');
 
 class OTPService {
   constructor() {
     this.EXPIRY_MINUTES = process.env.NODE_ENV === 'production' ? 5 : 10;
     this.MAX_ATTEMPTS = 5;
-    this.RATE_LIMIT_SECONDS = process.env.NODE_ENV === 'production' ? 60 : 10; // Wait before requesting new OTP
+    this.RATE_LIMIT_SECONDS = process.env.NODE_ENV === 'production' ? 60 : 10;
     this.CODE_LENGTH = 4;
   }
 
-generateCode() {
-    // 🔥 ALWAYS return 1234 for testing
-    return '1234';
-    
-    /* Original code:
-    if (process.env.NODE_ENV === 'production') {
-      const array = new Uint32Array(1);
-      crypto.getRandomValues(array);
-      return String(array[0] % 9000 + 1000);
+generateCode(channel = 'test') {
+    if (channel === 'test') {
+      return '1234';
     }
-    return String(Math.floor(1000 + Math.random() * 9000));
-    */
+    
+    // Real random code for Telegram/SMS
+    const code = String(Math.floor(1000 + Math.random() * 9000));
+    console.log('🔍 [OTP] Generated random code:', code, 'for channel:', channel);
+    return code;
 }
 
-  // Send OTP with rate limiting
-  async sendOTP(phone, purpose = 'authentication') {
+
+  // Send OTP with channel support
+  async sendOTP(phone, purpose = 'authentication', channel = 'test') {
     // 1. Rate limit check
     const recentOTP = await Otp.findOne({
       phone,
@@ -56,8 +54,9 @@ generateCode() {
       });
     }
 
-    // 3. Generate code
-    const code = this.generateCode();
+    // 3. Generate code based on channel
+    const code = this.generateCode(channel);
+console.log('🔍 [OTP] sendOTP - channel:', channel, 'code:', code, 'phone:', phone);
 
     // 4. Delete old OTPs for this phone
     await Otp.deleteMany({ phone });
@@ -67,32 +66,37 @@ generateCode() {
       phone,
       code,
       purpose,
+      channel,
       expiresAt: new Date(Date.now() + this.EXPIRY_MINUTES * 60 * 1000),
       attempts: 0,
     });
 
-    // 6. Send via SMS service
+    // 6. Send via selected channel
+    let sendResult = { success: true, provider: channel };
+
     const message = 'Your Bingo verification code is: ' + code + 
       '. Expires in ' + this.EXPIRY_MINUTES + ' minutes.';
-    
-    let smsResult;
+
     try {
-      smsResult = await smsService.send(phone, message);
-    } catch (smsError) {
-      console.error('SMS send failed:', smsError.message);
-      smsResult = { success: false, error: smsError.message };
+      if (channel === 'telegram') {
+        await telegramService.sendOTP(phone, code);
+        sendResult = { success: true, provider: 'telegram' };
+      } else if (channel === 'sms') {
+        sendResult = await smsService.send(phone, message);
+      }
+      // 'test' channel: no external send, just store in DB
+    } catch (sendError) {
+      console.error(`${channel} send failed:`, sendError.message);
+      sendResult = { success: false, error: sendError.message, provider: channel };
     }
 
     return {
       success: true,
       message: 'OTP sent',
       expiresIn: this.EXPIRY_MINUTES * 60,
-      // ONLY return code in development
-      code: code,
-
-
-      
-      smsProvider: smsResult.provider || 'unknown',
+      code: (process.env.NODE_ENV !== 'production' || channel === 'test') ? code : undefined,
+      channel: channel,
+      provider: sendResult.provider || channel,
     };
   }
 
@@ -175,5 +179,3 @@ generateCode() {
 }
 
 module.exports = new OTPService();
-
-

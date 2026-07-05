@@ -23,7 +23,7 @@ const sampleSchema = new mongoose.Schema({
 const mainBingoRuleSchema = new mongoose.Schema({
   name: { type: String, required: true, unique: true },
   description: { type: String, default: '' },
-  method: { type: String, enum: ['rule', 'pattern'], required: true },
+  method: { type: String, enum: ['rule', 'pattern','mixed'], required: true },
   
   // Multi-language names
   nameAmharic: { type: String, default: '' },
@@ -133,6 +133,27 @@ const mainBingoRuleSchema = new mongoose.Schema({
     name: { type: String },
     cells: [[Number]]
   }],
+  // Mixed rules for 'mixed' method
+mixedRules: [{
+  type: { type: String, enum: ['count', 'pattern'] },
+  countConfig: {
+    linesToWin: { type: Number, default: 1 },
+    minRows: { type: Number, default: 0 },
+    minColumns: { type: Number, default: 0 },
+    minDiagonals: { type: Number, default: 0 },
+    minSquares: { type: Number, default: 0 },
+    minRectangles: { type: Number, default: 0 },
+    squareSize: { type: Number, default: 2 },
+    rectWidth: { type: Number, default: 3 },
+    rectHeight: { type: Number, default: 2 },
+    lineDirections: [{ type: String }],
+    allowOverlapping: { type: Boolean, default: true },
+    freeSpaceCounts: { type: Boolean, default: true },
+    cornersRequired: { type: Number, default: 0 },
+  },
+  patternIndex: { type: Number, default: 0 },
+  interception: { type: String, enum: ['canIntercept', 'mustIntercept', 'noInterception'], default: 'canIntercept' },
+}],
   
   samples: {
     wins: [sampleSchema],

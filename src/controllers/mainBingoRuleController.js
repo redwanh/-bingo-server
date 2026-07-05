@@ -1,20 +1,28 @@
 ﻿const MainBingoRule = require('../models/MainBingoRule');
 
+// ══════════════════════════════════════
+// CRUD
+// ══════════════════════════════════════
+
 exports.getAllRules = async (req, res) => {
-  const rules = await MainBingoRule.find().sort({ createdAt: -1 });
-  res.json({ success: true, rules });
+  try {
+    const rules = await MainBingoRule.find().sort({ createdAt: -1 }).lean();
+    res.json({ success: true, rules });
+  } catch (e) { res.status(500).json({ error: e.message }); }
 };
 
 exports.getRule = async (req, res) => {
-  const rule = await MainBingoRule.findById(req.params.id);
-  if (!rule) return res.status(404).json({ error: 'Rule not found' });
-  res.json({ success: true, rule });
+  try {
+    const rule = await MainBingoRule.findById(req.params.id).lean();
+    if (!rule) return res.status(404).json({ error: 'Rule not found' });
+    res.json({ success: true, rule });
+  } catch (e) { res.status(500).json({ error: e.message }); }
 };
 
 exports.createRule = async (req, res) => {
   try {
     const rule = await MainBingoRule.create({ ...req.body, createdBy: req.user.id });
-    res.json({ success: true, rule });
+    res.status(201).json({ success: true, rule });
   } catch (e) { res.status(400).json({ error: e.message }); }
 };
 
@@ -27,34 +35,52 @@ exports.updateRule = async (req, res) => {
 };
 
 exports.deleteRule = async (req, res) => {
-  const rule = await MainBingoRule.findByIdAndDelete(req.params.id);
-  if (!rule) return res.status(404).json({ error: 'Rule not found' });
-  res.json({ success: true, message: 'Rule deleted' });
+  try {
+    const rule = await MainBingoRule.findByIdAndDelete(req.params.id);
+    if (!rule) return res.status(404).json({ error: 'Rule not found' });
+    res.json({ success: true, message: 'Deleted' });
+  } catch (e) { res.status(500).json({ error: e.message }); }
 };
+
+// ══════════════════════════════════════
+// TEST
+// ══════════════════════════════════════
 
 exports.testRule = async (req, res) => {
   try {
-    const rule = await MainBingoRule.findById(req.params.id);
+    const rule = await MainBingoRule.findById(req.params.id).lean();
     if (!rule) return res.status(404).json({ error: 'Rule not found' });
     
-    if (!req.body || !req.body.markedCells || !Array.isArray(req.body.markedCells)) {
-      return res.status(400).json({ error: 'markedCells is required and must be an array' });
+    const { markedCells } = req.body;
+    if (!markedCells || !Array.isArray(markedCells)) {
+      return res.status(400).json({ error: 'markedCells required' });
     }
     
-    const { markedCells } = req.body;
     const result = validateRule(rule, markedCells);
-    
-    res.json({ success: true, result: { ...result, markedCells } });
+    res.json({ success: true, result: { ...result, markedCells, ruleName: rule.name, method: rule.method } });
   } catch (e) { res.status(400).json({ error: e.message }); }
+};
+
+// ══════════════════════════════════════
+// SAMPLES
+// ══════════════════════════════════════
+
+exports.getSamples = async (req, res) => {
+  try {
+    const rule = await MainBingoRule.findById(req.params.id).lean();
+    if (!rule) return res.status(404).json({ error: 'Rule not found' });
+    res.json({ success: true, samples: rule.samples || { wins: [], losses: [] } });
+  } catch (e) { res.status(500).json({ error: e.message }); }
 };
 
 exports.saveSample = async (req, res) => {
   try {
     const { type, sample } = req.body;
-    if (!type || !['win', 'loss'].includes(type)) return res.status(400).json({ error: 'Type must be "win" or "loss"' });
+    if (!type || !['win', 'loss'].includes(type)) return res.status(400).json({ error: 'Type must be win or loss' });
     
     const rule = await MainBingoRule.findById(req.params.id);
     if (!rule) return res.status(404).json({ error: 'Rule not found' });
+    
     if (!rule.samples) rule.samples = { wins: [], losses: [] };
     
     const sampleData = {
@@ -68,26 +94,22 @@ exports.saveSample = async (req, res) => {
     else rule.samples.losses.push(sampleData);
     
     await rule.save();
-    res.json({ success: true, message: `${type} sample saved`, rule });
+    res.json({ success: true, message: `${type} sample saved`, samples: rule.samples });
   } catch (e) { res.status(400).json({ error: e.message }); }
 };
 
 exports.removeSample = async (req, res) => {
   try {
     const { type, index } = req.params;
-    if (!type || !['wins', 'losses'].includes(type)) return res.status(400).json({ error: 'Type must be "wins" or "losses"' });
-    
     const rule = await MainBingoRule.findById(req.params.id);
     if (!rule) return res.status(404).json({ error: 'Rule not found' });
     
-    if (rule.samples && rule.samples[type]) {
-      const idx = parseInt(index);
-      if (idx >= 0 && idx < rule.samples[type].length) {
-        rule.samples[type].splice(idx, 1);
-        await rule.save();
-      }
+    const idx = parseInt(index);
+    if (rule.samples && rule.samples[type] && idx >= 0 && idx < rule.samples[type].length) {
+      rule.samples[type].splice(idx, 1);
+      await rule.save();
     }
-    res.json({ success: true, message: 'Sample removed', rule });
+    res.json({ success: true });
   } catch (e) { res.status(400).json({ error: e.message }); }
 };
 
@@ -97,316 +119,298 @@ exports.clearSamples = async (req, res) => {
     if (!rule) return res.status(404).json({ error: 'Rule not found' });
     rule.samples = { wins: [], losses: [] };
     await rule.save();
-    res.json({ success: true, message: 'All samples cleared', rule });
+    res.json({ success: true });
   } catch (e) { res.status(400).json({ error: e.message }); }
 };
 
-exports.getSamples = async (req, res) => {
-  try {
-    const rule = await MainBingoRule.findById(req.params.id);
-    if (!rule) return res.status(404).json({ error: 'Rule not found' });
-    res.json({ success: true, samples: rule.samples || { wins: [], losses: [] } });
-  } catch (e) { res.status(400).json({ error: e.message }); }
-};
-
-// ============================================
-// VALIDATION FUNCTIONS
-// ============================================
+// ══════════════════════════════════════
+// VALIDATION ENGINE
+// ══════════════════════════════════════
 
 function validateRule(rule, markedCells) {
+  const cfg = rule.ruleConfig || {};
   const markedSet = new Set(markedCells.map(c => `${c[0]},${c[1]}`));
-  const cfg = rule.ruleConfig;
   
-  let effectiveMarkedSet = new Set(markedSet);
-  if (cfg.freeSpaceCounts !== false && cfg.freeSpaceBlocked !== true) {
-    effectiveMarkedSet.add('2,2');
+  // Build effective set
+  let effectiveSet = new Set(markedSet);
+  
+  // Only add FREE space if explicitly enabled
+  if (cfg.freeSpaceCounts === true) {
+    effectiveSet.add('2,2');
   }
-  if (cfg.additionalFreeSpaces) {
-    cfg.additionalFreeSpaces.forEach(([r, c]) => effectiveMarkedSet.add(`${r},${c}`));
+  // If freeSpaceCounts is false, REMOVE free cell even if manually clicked
+  if (cfg.freeSpaceCounts === false) {
+    effectiveSet.delete('2,2');
   }
   
-  if (rule.method === 'pattern') return validatePatternRule(rule, effectiveMarkedSet);
-  return validateLineBasedRule(rule, effectiveMarkedSet, markedCells);
+  if (rule.method === 'pattern') return validatePattern(rule, effectiveSet);
+  if (rule.method === 'mixed') return validateMixed(rule, effectiveSet, markedCells);
+  return validateCountBased(rule, effectiveSet, markedCells);
 }
 
-function validateLineBasedRule(rule, effectiveMarkedSet, markedCells) {
-  const cfg = rule.ruleConfig;
-  const gridSize = 5;
-  const completedLines = [];
-  const lineDirections = cfg.lineDirections || ['horizontal', 'vertical', 'diagonal'];
+function validateCountBased(rule, effectiveSet, markedCells) {
+  const cfg = rule.ruleConfig || {};
   
-  // ══════════════════════════════════════
-  // CHECK ROWS
-  // ══════════════════════════════════════
-  if (lineDirections.includes('horizontal')) {
-    for (let r = 0; r < gridSize; r++) {
-      let complete = true;
-      const cells = [];
-      for (let c = 0; c < gridSize; c++) {
-        if (!effectiveMarkedSet.has(`${r},${c}`)) { complete = false; break; }
-        cells.push([r, c]);
-      }
-      if (complete) completedLines.push({ type: 'horizontal', index: r, cells });
-    }
+  // Get ALL completed shapes
+  const allShapes = findAllShapes(effectiveSet, cfg);
+  
+  // If no overlapping allowed, filter to non-overlapping shapes
+  let validShapes = allShapes;
+  
+  if (cfg.allowOverlapping === false) {
+    validShapes = filterNonOverlapping(allShapes);
   }
   
-  // ══════════════════════════════════════
-  // CHECK COLUMNS
-  // ══════════════════════════════════════
-  if (lineDirections.includes('vertical')) {
-    for (let c = 0; c < gridSize; c++) {
-      let complete = true;
-      const cells = [];
-      for (let r = 0; r < gridSize; r++) {
-        if (!effectiveMarkedSet.has(`${r},${c}`)) { complete = false; break; }
-        cells.push([r, c]);
-      }
-      if (complete) completedLines.push({ type: 'vertical', index: c, cells });
-    }
+  // Count by type from valid shapes
+  const rowsFound = validShapes.filter(s => s.type === 'horizontal').length;
+  const colsFound = validShapes.filter(s => s.type === 'vertical').length;
+  const diagsFound = validShapes.filter(s => s.type === 'diagonal').length;
+  const squaresFound = validShapes.filter(s => s.type === 'square').length;
+  const rectanglesFound = validShapes.filter(s => s.type === 'rectangle').length;
+  const total = rowsFound + colsFound + diagsFound + squaresFound + rectanglesFound;
+  
+  // Check specific lines
+  if (cfg.specificLines) {
+    const sl = cfg.specificLines;
+    if (sl.topRow && !validShapes.some(s => s.type === 'horizontal' && s.index === 0)) return fail('Top row required');
+    if (sl.bottomRow && !validShapes.some(s => s.type === 'horizontal' && s.index === 4)) return fail('Bottom row required');
+    if (sl.leftColumn && !validShapes.some(s => s.type === 'vertical' && s.index === 0)) return fail('Left column required');
+    if (sl.rightColumn && !validShapes.some(s => s.type === 'vertical' && s.index === 4)) return fail('Right column required');
+    if (sl.mainDiagonal && !validShapes.some(s => s.type === 'diagonal' && s.index === 1)) return fail('Main diagonal required');
+    if (sl.antiDiagonal && !validShapes.some(s => s.type === 'diagonal' && s.index === 2)) return fail('Anti-diagonal required');
   }
   
-  // ══════════════════════════════════════
-  // CHECK DIAGONALS
-  // ══════════════════════════════════════
-  if (lineDirections.includes('diagonal')) {
-    let d1Complete = true;
-    const d1Cells = [];
-    for (let i = 0; i < gridSize; i++) {
-      if (!effectiveMarkedSet.has(`${i},${i}`)) { d1Complete = false; break; }
-      d1Cells.push([i, i]);
-    }
-    if (d1Complete) completedLines.push({ type: 'diagonal', index: 1, cells: d1Cells });
-    
-    let d2Complete = true;
-    const d2Cells = [];
-    for (let i = 0; i < gridSize; i++) {
-      if (!effectiveMarkedSet.has(`${i},${gridSize-1-i}`)) { d2Complete = false; break; }
-      d2Cells.push([i, gridSize-1-i]);
-    }
-    if (d2Complete) completedLines.push({ type: 'diagonal', index: 2, cells: d2Cells });
+  // Corners
+  if (cfg.cornersRequired > 0) {
+    const corners = ['0,0', '0,4', '4,0', '4,4'].filter(c => effectiveSet.has(c));
+    if (corners.length < cfg.cornersRequired) return fail(`Need ${cfg.cornersRequired} corners, found ${corners.length}`);
   }
   
-  // ══════════════════════════════════════
-  // CHECK SQUARES (2x2 only by default)
-  // ══════════════════════════════════════
-  let squaresFound = 0;
-  if (lineDirections.includes('square')) {
-    const minSize = cfg.squareMinSize || 2;
-    const maxSize = cfg.squareMaxSize || 2; // Default to 2x2 only
-    
-    for (let size = minSize; size <= maxSize; size++) {
-      for (let r = 0; r <= gridSize - size; r++) {
-        for (let c = 0; c <= gridSize - size; c++) {
-          let complete = true;
-          const cells = [];
-          for (let i = 0; i < size; i++) {
-            for (let j = 0; j < size; j++) {
-              if (!effectiveMarkedSet.has(`${r + i},${c + j}`)) { complete = false; break; }
-              cells.push([r + i, c + j]);
-            }
-            if (!complete) break;
-          }
-          if (complete) {
-            squaresFound++;
-            completedLines.push({ type: 'square', size, row: r, col: c, cells });
-          }
-        }
-      }
-    }
+  // Check minimums
+  if (rowsFound < (cfg.minRows || 0)) return fail(`Need ${cfg.minRows || 0} rows, found ${rowsFound}`);
+  if (colsFound < (cfg.minColumns || 0)) return fail(`Need ${cfg.minColumns || 0} columns, found ${colsFound}`);
+  if (diagsFound < (cfg.minDiagonals || 0)) return fail(`Need ${cfg.minDiagonals || 0} diagonals, found ${diagsFound}`);
+  if (squaresFound < (cfg.minSquares || 0)) return fail(`Need ${cfg.minSquares || 0} squares, found ${squaresFound}`);
+  if (rectanglesFound < (cfg.minRectangles || 0)) return fail(`Need ${cfg.minRectangles || 0} rectangles, found ${rectanglesFound}`);
+  
+  if (total < (cfg.linesToWin || 1)) {
+    return fail(`Need ${cfg.linesToWin} non-overlapping shapes, found ${total} (${rowsFound}R ${colsFound}C ${diagsFound}D ${squaresFound}Sq ${rectanglesFound}Re)`);
   }
-  
-  // ══════════════════════════════════════
-  // CHECK RECTANGLES (3x2 by default)
-  // ══════════════════════════════════════
-  let rectanglesFound = 0;
-  if (lineDirections.includes('rectangle')) {
-    const minW = cfg.rectMinWidth || 3;  // Default 3 wide
-    const maxW = cfg.rectMaxWidth || 3;
-    const minH = cfg.rectMinHeight || 2; // Default 2 tall
-    const maxH = cfg.rectMaxHeight || 2;
-    
-    for (let w = minW; w <= maxW; w++) {
-      for (let h = minH; h <= maxH; h++) {
-        for (let r = 0; r <= gridSize - h; r++) {
-          for (let c = 0; c <= gridSize - w; c++) {
-            let complete = true;
-            const cells = [];
-            for (let i = 0; i < h; i++) {
-              for (let j = 0; j < w; j++) {
-                if (!effectiveMarkedSet.has(`${r + i},${c + j}`)) { complete = false; break; }
-                cells.push([r + i, c + j]);
-              }
-              if (!complete) break;
-            }
-            if (complete) {
-              rectanglesFound++;
-              completedLines.push({ type: 'rectangle', width: w, height: h, row: r, col: c, cells });
-            }
-          }
-        }
-      }
-    }
-  }
-  
-  // ══════════════════════════════════════
-  // COUNT BY TYPE
-  // ══════════════════════════════════════
-  let rowsFound = completedLines.filter(l => l.type === 'horizontal').length;
-  let colsFound = completedLines.filter(l => l.type === 'vertical').length;
-  let diagsFound = completedLines.filter(l => l.type === 'diagonal').length;
-  let totalLines = rowsFound + colsFound + diagsFound + squaresFound + rectanglesFound;
-  
-  // ══════════════════════════════════════
-  // EXACT CHECKS (for all types)
-  // ══════════════════════════════════════
-  if (cfg.exactRows !== null && rowsFound !== cfg.exactRows)
-    return { valid: false, message: `Need exactly ${cfg.exactRows} rows, found ${rowsFound}` };
-  if (cfg.exactColumns !== null && colsFound !== cfg.exactColumns)
-    return { valid: false, message: `Need exactly ${cfg.exactColumns} columns, found ${colsFound}` };
-  if (cfg.exactDiagonals !== null && diagsFound !== cfg.exactDiagonals)
-    return { valid: false, message: `Need exactly ${cfg.exactDiagonals} diagonals, found ${diagsFound}` };
-  if (cfg.exactSquares !== null && squaresFound !== cfg.exactSquares)
-    return { valid: false, message: `Need exactly ${cfg.exactSquares} squares, found ${squaresFound}` };
-  if (cfg.exactRectangles !== null && rectanglesFound !== cfg.exactRectangles)
-    return { valid: false, message: `Need exactly ${cfg.exactRectangles} rectangles, found ${rectanglesFound}` };
-  
-  // ══════════════════════════════════════
-  // MAX CHECKS (for all types)
-  // ══════════════════════════════════════
-  if (cfg.maxRows !== null && rowsFound > cfg.maxRows)
-    return { valid: false, message: `Maximum ${cfg.maxRows} rows, found ${rowsFound}` };
-  if (cfg.maxColumns !== null && colsFound > cfg.maxColumns)
-    return { valid: false, message: `Maximum ${cfg.maxColumns} columns, found ${colsFound}` };
-  if (cfg.maxDiagonals !== null && diagsFound > cfg.maxDiagonals)
-    return { valid: false, message: `Maximum ${cfg.maxDiagonals} diagonals, found ${diagsFound}` };
-  if (cfg.maxSquares !== null && squaresFound > cfg.maxSquares)
-    return { valid: false, message: `Maximum ${cfg.maxSquares} squares, found ${squaresFound}` };
-  if (cfg.maxRectangles !== null && rectanglesFound > cfg.maxRectangles)
-    return { valid: false, message: `Maximum ${cfg.maxRectangles} rectangles, found ${rectanglesFound}` };
-  
-
- // ══════════════════════════════════════
-// OVERLAPPING CHECK - FIXED
-// ══════════════════════════════════════
-if (cfg.allowOverlapping === false) {
-    const uniqueLines = [];
-    const usedCells = new Set(); // Track ALL used cells (any type)
-    
-    for (const line of completedLines) {
-      const lineCellKeys = line.cells.map(([r, c]) => `${r},${c}`);
-      
-      // Check if ANY cell is already used by ANY other line
-      const hasOverlap = lineCellKeys.some(key => usedCells.has(key));
-      
-      if (!hasOverlap) {
-        uniqueLines.push(line);
-        // Mark all cells as used
-        lineCellKeys.forEach(key => usedCells.add(key));
-      }
-    }
-    
-    // Recalculate all counts with unique lines only
-    rowsFound = uniqueLines.filter(l => l.type === 'horizontal').length;
-    colsFound = uniqueLines.filter(l => l.type === 'vertical').length;
-    diagsFound = uniqueLines.filter(l => l.type === 'diagonal').length;
-    squaresFound = uniqueLines.filter(l => l.type === 'square').length;
-    rectanglesFound = uniqueLines.filter(l => l.type === 'rectangle').length;
-    totalLines = rowsFound + colsFound + diagsFound + squaresFound + rectanglesFound;
-}
-  
-  // ══════════════════════════════════════
-  // INTERSECTION CHECK (applies to ALL types)
-  // ══════════════════════════════════════
-  if (cfg.linesMustIntersect && totalLines > 1) {
-    const intersectionPoints = {};
-    completedLines.forEach((line, i) => {
-      line.cells.forEach(([r, c]) => {
-        const key = `${r},${c}`;
-        if (!intersectionPoints[key]) intersectionPoints[key] = [];
-        intersectionPoints[key].push(i);
-      });
-    });
-    
-    const commonIntersections = Object.entries(intersectionPoints)
-      .filter(([_, lines]) => lines.length >= totalLines);
-    
-    if (commonIntersections.length === 0) {
-      return { valid: false, message: 'Lines must intersect at a common point' };
-    }
-    
-    if (cfg.intersectionPoint?.row !== null && cfg.intersectionPoint?.col !== null) {
-      const key = `${cfg.intersectionPoint.row},${cfg.intersectionPoint.col}`;
-      if (!intersectionPoints[key] || intersectionPoints[key].length < totalLines) {
-        return { valid: false, message: `Lines must intersect at row ${cfg.intersectionPoint.row}, col ${cfg.intersectionPoint.col}` };
-      }
-    }
-  }
-  
-  if (cfg.linesMustNotIntersect) {
-    const cellUsageCount = {};
-    completedLines.forEach(line => {
-      line.cells.forEach(([r, c]) => {
-        const key = `${r},${c}`;
-        cellUsageCount[key] = (cellUsageCount[key] || 0) + 1;
-      });
-    });
-    const overlaps = Object.entries(cellUsageCount).filter(([_, count]) => count > 1);
-    if (overlaps.length > 0) {
-      return { valid: false, message: `Lines must not share cells. Found ${overlaps.length} shared cells.` };
-    }
-  }
-  
-  // ══════════════════════════════════════
-  // FREE SPACE CHECK
-  // ══════════════════════════════════════
-  if (cfg.freeSpaceRequiredForWin && !effectiveMarkedSet.has('2,2')) {
-    return { valid: false, message: 'Free space must be included in win' };
-  }
-  
-  // ══════════════════════════════════════
-  // CORNERS CHECK
-  // ══════════════════════════════════════
-  let cornersOk = true;
-  if (cfg.cornersRequired) {
-    cornersOk = effectiveMarkedSet.has('0,0') && effectiveMarkedSet.has('0,4') && 
-                effectiveMarkedSet.has('4,0') && effectiveMarkedSet.has('4,4');
-  }
-  
-  // ══════════════════════════════════════
-  // FINAL WIN CHECK
-  // ══════════════════════════════════════
-  const totalMarked = markedCells ? markedCells.length : 0;
-  
-  const meetsMinimums = 
-    rowsFound >= (cfg.minRows || 0) &&
-    colsFound >= (cfg.minColumns || 0) &&
-    diagsFound >= (cfg.minDiagonals || 0) &&
-    squaresFound >= (cfg.minSquares || 0) &&
-    rectanglesFound >= (cfg.minRectangles || 0) &&
-    totalLines >= (cfg.linesToWin || 1) &&
-    (!cfg.minCellsMarked || totalMarked >= cfg.minCellsMarked) &&
-    cornersOk;
   
   return {
-    valid: meetsMinimums,
-    message: meetsMinimums 
-      ? `✅ Valid! ${totalLines} lines (${rowsFound}R ${colsFound}C ${diagsFound}D ${squaresFound}Sq ${rectanglesFound}Re)`
-      : `❌ Need ${cfg.linesToWin} total. Found: ${rowsFound}R ${colsFound}C ${diagsFound}D ${squaresFound}Sq ${rectanglesFound}Re = ${totalLines}`,
-    details: { rowsFound, colsFound, diagsFound, squaresFound, rectanglesFound, totalLines, totalMarked, cornersOk }
+    valid: true,
+    message: `✅ WIN! ${total} shapes`,
+    details: { rowsFound, colsFound, diagsFound, squaresFound, rectanglesFound, totalLines: total, totalMarked: effectiveSet.size, cornersOk: true }
   };
 }
 
-function validatePatternRule(rule, effectiveMarkedSet) {
-  for (const pattern of rule.patterns) {
-    const allMatch = pattern.cells.every(([row, col]) => effectiveMarkedSet.has(`${row},${col}`));
-    if (allMatch) return { valid: true, message: `Pattern "${pattern.name}" matched!`, details: { patternName: pattern.name } };
+// 🔧 NEW: Find ALL completed shapes with their cells
+function findAllShapes(effectiveSet, cfg) {
+  const dirs = cfg.lineDirections || ['horizontal', 'vertical', 'diagonal'];
+  const shapes = [];
+  
+  // Rows
+  if (dirs.includes('horizontal')) {
+    for (let r = 0; r < 5; r++) {
+      if (isRowComplete(effectiveSet, r)) {
+        const cells = [];
+        for (let c = 0; c < 5; c++) cells.push([r, c]);
+        shapes.push({ type: 'horizontal', index: r, cells });
+      }
+    }
   }
-  return { valid: false, message: 'Pattern not matched', details: { patternName: null } };
+  
+  // Columns
+  if (dirs.includes('vertical')) {
+    for (let c = 0; c < 5; c++) {
+      if (isColComplete(effectiveSet, c)) {
+        const cells = [];
+        for (let r = 0; r < 5; r++) cells.push([r, c]);
+        shapes.push({ type: 'vertical', index: c, cells });
+      }
+    }
+  }
+  
+  // Diagonals
+  if (dirs.includes('diagonal')) {
+    if (isDiagComplete(effectiveSet, 1)) {
+      const cells = [];
+      for (let i = 0; i < 5; i++) cells.push([i, i]);
+      shapes.push({ type: 'diagonal', index: 1, cells });
+    }
+    if (isDiagComplete(effectiveSet, 2)) {
+      const cells = [];
+      for (let i = 0; i < 5; i++) cells.push([i, 4-i]);
+      shapes.push({ type: 'diagonal', index: 2, cells });
+    }
+  }
+  
+  // Squares
+  if (dirs.includes('square')) {
+    const size = cfg.squareSize || 2;
+    for (let r = 0; r <= 5 - size; r++) {
+      for (let c = 0; c <= 5 - size; c++) {
+        if (isBlockComplete(effectiveSet, r, c, size, size)) {
+          const cells = [];
+          for (let i = 0; i < size; i++)
+            for (let j = 0; j < size; j++)
+              cells.push([r + i, c + j]);
+          shapes.push({ type: 'square', size, row: r, col: c, cells });
+        }
+      }
+    }
+  }
+  
+  // Rectangles
+  if (dirs.includes('rectangle')) {
+    const w = cfg.rectWidth || 3, h = cfg.rectHeight || 2;
+    for (let r = 0; r <= 5 - h; r++) {
+      for (let c = 0; c <= 5 - w; c++) {
+        if (isBlockComplete(effectiveSet, r, c, w, h)) {
+          const cells = [];
+          for (let i = 0; i < h; i++)
+            for (let j = 0; j < w; j++)
+              cells.push([r + i, c + j]);
+          shapes.push({ type: 'rectangle', width: w, height: h, row: r, col: c, cells });
+        }
+      }
+    }
+  }
+  
+  return shapes;
 }
 
-module.exports = { 
-  getAllRules: exports.getAllRules, getRule: exports.getRule, createRule: exports.createRule, 
-  updateRule: exports.updateRule, deleteRule: exports.deleteRule, testRule: exports.testRule,
-  saveSample: exports.saveSample, removeSample: exports.removeSample, 
+// 🔧 NEW: Filter to non-overlapping shapes (greedy algorithm)
+function filterNonOverlapping(shapes) {
+  if (shapes.length <= 1) return shapes;
+  
+  const usedCells = new Set();
+  const result = [];
+  
+  // Sort by type priority: lines first, then squares, then rectangles
+  const priority = { horizontal: 1, vertical: 1, diagonal: 1, square: 2, rectangle: 3 };
+  const sorted = [...shapes].sort((a, b) => (priority[a.type] || 1) - (priority[b.type] || 1));
+  
+  for (const shape of sorted) {
+    const cellKeys = shape.cells.map(([r, c]) => `${r},${c}`);
+    const hasOverlap = cellKeys.some(key => usedCells.has(key));
+    
+    if (!hasOverlap) {
+      result.push(shape);
+      cellKeys.forEach(key => usedCells.add(key));
+    }
+  }
+  
+  return result;
+}
+
+function countShapes(effectiveSet, cfg) {
+  const dirs = cfg.lineDirections || ['horizontal', 'vertical', 'diagonal'];
+  let rows = 0, cols = 0, diags = 0, squares = 0, rectangles = 0;
+  
+  // Rows
+  if (dirs.includes('horizontal')) {
+    for (let r = 0; r < 5; r++) { if (isRowComplete(effectiveSet, r)) rows++; }
+  }
+  // Columns
+  if (dirs.includes('vertical')) {
+    for (let c = 0; c < 5; c++) { if (isColComplete(effectiveSet, c)) cols++; }
+  }
+  // Diagonals
+  if (dirs.includes('diagonal')) {
+    if (isDiagComplete(effectiveSet, 1)) diags++;
+    if (isDiagComplete(effectiveSet, 2)) diags++;
+  }
+  // Squares
+  if (dirs.includes('square')) {
+    const size = cfg.squareSize || 2;
+    for (let r = 0; r <= 5 - size; r++) {
+      for (let c = 0; c <= 5 - size; c++) {
+        if (isBlockComplete(effectiveSet, r, c, size, size)) squares++;
+      }
+    }
+  }
+  // Rectangles
+  if (dirs.includes('rectangle')) {
+    const w = cfg.rectWidth || 3, h = cfg.rectHeight || 2;
+    for (let r = 0; r <= 5 - h; r++) {
+      for (let c = 0; c <= 5 - w; c++) {
+        if (isBlockComplete(effectiveSet, r, c, w, h)) rectangles++;
+      }
+    }
+  }
+  
+  return { rows, cols, diags, squares, rectangles };
+}
+
+function isRowComplete(set, r) {
+  for (let c = 0; c < 5; c++) { if (!set.has(`${r},${c}`)) return false; }
+  return true;
+}
+function isColComplete(set, c) {
+  for (let r = 0; r < 5; r++) { if (!set.has(`${r},${c}`)) return false; }
+  return true;
+}
+function isDiagComplete(set, type) {
+  for (let i = 0; i < 5; i++) {
+    const key = type === 1 ? `${i},${i}` : `${i},${4-i}`;
+    if (!set.has(key)) return false;
+  }
+  return true;
+}
+function isBlockComplete(set, row, col, w, h) {
+  for (let r = row; r < row + h; r++) {
+    for (let c = col; c < col + w; c++) {
+      if (!set.has(`${r},${c}`)) return false;
+    }
+  }
+  return true;
+}
+
+function validatePattern(rule, effectiveSet) {
+  for (const pattern of (rule.patterns || [])) {
+    if (!pattern.cells || pattern.cells.length === 0) continue;
+    if (pattern.cells.every(([r, c]) => effectiveSet.has(`${r},${c}`))) {
+      return { valid: true, message: `✅ Pattern "${pattern.name}" matched!`, details: { patternName: pattern.name } };
+    }
+  }
+  return fail('No pattern matched');
+}
+
+function validateMixed(rule, effectiveSet, markedCells) {
+  const subRules = rule.mixedRules || [];
+  if (subRules.length === 0) return fail('No sub-rules defined');
+  
+  for (let i = 0; i < subRules.length; i++) {
+    const sr = subRules[i];
+    let subResult;
+    
+    if (sr.type === 'count') {
+      subResult = countShapes(effectiveSet, sr.countConfig || {});
+      const total = subResult.rows + subResult.cols + subResult.diags + subResult.squares + subResult.rectangles;
+      if (total < ((sr.countConfig?.linesToWin) || 1)) {
+        return fail(`Sub-rule #${i+1} (count): Need ${sr.countConfig?.linesToWin || 1} shapes, found ${total}`);
+      }
+    } else if (sr.type === 'pattern') {
+      const pattern = rule.patterns?.[sr.patternIndex];
+      if (!pattern) return fail(`Sub-rule #${i+1}: Pattern not found`);
+      if (!pattern.cells.every(([r, c]) => effectiveSet.has(`${r},${c}`))) {
+        return fail(`Sub-rule #${i+1}: Pattern "${pattern.name}" not matched`);
+      }
+    }
+  }
+  
+  return { valid: true, message: '✅ All mixed sub-rules passed!', details: { totalMarked: effectiveSet.size } };
+}
+
+function fail(msg) {
+  return { valid: false, message: `❌ ${msg}`, details: {} };
+}
+
+module.exports = {
+  getAllRules: exports.getAllRules, getRule: exports.getRule,
+  createRule: exports.createRule, updateRule: exports.updateRule,
+  deleteRule: exports.deleteRule, testRule: exports.testRule,
+  saveSample: exports.saveSample, removeSample: exports.removeSample,
   clearSamples: exports.clearSamples, getSamples: exports.getSamples
 };

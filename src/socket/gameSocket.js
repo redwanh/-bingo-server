@@ -4,14 +4,15 @@ const Card = require('../models/Card');
 const Game = require('../models/Game');
 
 class GameSocket {
-  constructor(io, engine) {
+  constructor(io, fastEngine, mainEngine) {
     this.io = io;
-    this.engine = engine;
+    this.engine = fastEngine;       // Fast bingo engine
+    this.mainEngine = mainEngine;   // Main bingo engine
     this.autoMarkUsers = new Map();
   }
 
   initialize() {
-    // 🔥 Auth middleware with debug
+    // Auth middleware
     this.io.use(async (socket, next) => {
       try {
         const token = socket.handshake.auth.token;
@@ -25,7 +26,7 @@ class GameSocket {
         let decoded;
         try {
           decoded = jwt.verify(token, process.env.JWT_SECRET);
-          console.log('🔐 [AUTH] Token valid, user:', decoded.id, 'expires:', new Date(decoded.exp * 1000).toISOString());
+          console.log('🔐 [AUTH] Token valid, user:', decoded.id);
         } catch (jwtError) {
           console.log('❌ [AUTH] JWT verify failed:', jwtError.message);
           return next(new Error('Invalid token'));
@@ -34,20 +35,11 @@ class GameSocket {
         const user = await User.findById(decoded.id);
         console.log('🔐 [AUTH] User found:', !!user, '| active:', user?.isActive);
         
-        if (!user) {
-          console.log('❌ [AUTH] User not found in DB');
-          return next(new Error('User not found'));
-        }
-        
-        if (!user.isActive) {
-          console.log('❌ [AUTH] Account deactivated');
-          return next(new Error('Account deactivated'));
-        }
+        if (!user) return next(new Error('User not found'));
+        if (!user.isActive) return next(new Error('Account deactivated'));
         
         if (user.currentSessionToken && user.currentSessionToken !== token) {
           console.log('❌ [AUTH] Session mismatch!');
-          console.log('   Stored:', user.currentSessionToken?.substring(0, 30) + '...');
-          console.log('   Received:', token?.substring(0, 30) + '...');
           return next(new Error('Logged in on another device'));
         }
         
@@ -92,15 +84,25 @@ class GameSocket {
         socket.join(roomId);
         console.log(`📍 ${socket.username} joined room: ${roomId}`);
         
-        // Only send game state for fast_bingo rooms
+        // Send game state for fast_bingo
         if (roomId === 'fast_bingo') {
           try {
-            console.log(`📊 [ROOM] Fetching game state for ${socket.username}`);
             const state = await this.engine.getGameState(roomId, socket.userId);
-            console.log(`📊 [ROOM] Game state found:`, state ? `Game #${state.gameNumber} (${state.status})` : 'NULL');
             socket.emit('gameState', state);
           } catch (e) {
-            console.error('❌ [ROOM] Error getting game state:', e.message);
+            console.error('❌ [ROOM] Error getting fast bingo state:', e.message);
+          }
+        }
+
+        // Send game state for main-bingo-room
+        if (roomId === 'main-bingo-room') {
+          try {
+            const mainBingoCtrl = require('../controllers/mainBingoController');
+            const state = await mainBingoCtrl.getStateForSocket(socket.userId);
+            socket.emit('gameState', state);
+          } catch (e) {
+            console.error('❌ [ROOM] Error getting main bingo state:', e.message);
+            socket.emit('gameState', { active: false, message: 'Error loading game' });
           }
         }
       });
@@ -113,9 +115,232 @@ class GameSocket {
       });
 
       // ========================
+      // MAIN BINGO - Pick Cards
+      // ========================
+            socket.on('mainBingoPickCards', async (data, callback) => {
+        const { quantity } = data;
+        console.log(`🎫 [PICK] ${socket.username} picking ${quantity} cards`);
+        
+        try {
+          const MainBingoGame = require('../models/MainBingoGame');
+          const MainBingoConfig = require('../models/MainBingoConfig');
+          const Card = require('../models/Card');
+          
+          const game = await MainBingoGame.getActiveGame();
+          if (!game || (game.status !== 'setup' && game.status !== 'countdown')) {
+            return callback({ status: 'error', message: 'Game not available' });
+          }
+          
+          const config = await MainBingoConfig.findById(game.configId);
+          const totalPlayerCards = await Card.countDocuments({ 
+            gameId: game._id, userId: socket.userId 
+          });
+          const maxAllowed = config.maxCardsPerPlayer - totalPlayerCards;
+          
+          if (maxAllowed <= 0) {
+            return callback({ status: 'error', message: 'Max cards reached' });
+          }
+          
+          const actualQty = Math.min(quantity, maxAllowed);
+          
+          // 🔥 Try pool first
+          let availableCards = await Card.aggregate([
+            { $match: { gameId: null, userId: null, status: 'preview' } },
+            { $sample: { size: actualQty } }
+          ]);
+          
+          // 🔥 If pool is empty, raid unregistered preview cards from other users
+          if (availableCards.length === 0) {
+            console.log('🔄 Pool empty! Raiding unregistered preview cards...');
+            
+            availableCards = await Card.aggregate([
+              { 
+                $match: { 
+                  gameId: game._id, 
+                  status: 'preview',
+                  userId: { $ne: socket.userId } // Don't take from same user
+                } 
+              },
+              { $sample: { size: actualQty } }
+            ]);
+            
+            if (availableCards.length > 0) {
+              // Notify original owners that their cards are being raided
+              const raidedUserIds = [...new Set(availableCards.map(c => c.userId.toString()))];
+              for (const uid of raidedUserIds) {
+                const userSocket = this.engine.getUserSocket(uid);
+                if (userSocket) {
+                  this.io.to(userSocket).emit('cardsRaided', {
+                    message: 'Your unregistered preview cards are available for others to claim! Register now!',
+                    count: availableCards.filter(c => c.userId.toString() === uid).length
+                  });
+                }
+              }
+              
+              console.log(`🔄 Raided ${availableCards.length} cards from ${raidedUserIds.length} users`);
+            }
+          }
+          
+          if (availableCards.length === 0) {
+            return callback({ status: 'error', message: 'No cards available. All preview cards are registered.' });
+          }
+          
+          // Assign cards to requesting player
+          const cardIds = availableCards.map(c => c._id);
+          await Card.updateMany(
+            { _id: { $in: cardIds } },
+            { $set: { gameId: game._id, userId: socket.userId, status: 'preview' } }
+          );
+          
+          const cards = await Card.find({ _id: { $in: cardIds } });
+          
+          // Update game players list
+          const player = game.players.find(p => p.userId.toString() === socket.userId);
+          if (!player) {
+            game.players.push({ userId: socket.userId, cards: cardIds });
+          } else {
+            player.cards.push(...cardIds);
+          }
+          await game.save();
+          
+          callback({ 
+            status: 'ok', 
+            cards: cards,
+            cardsOwned: totalPlayerCards + cards.length,
+            raided: availableCards.length > 0 && availableCards[0].gameId !== null
+          });
+          
+          console.log(`✅ [PICK] ${cards.length} cards assigned to ${socket.username}`);
+          
+        } catch (e) {
+          console.error('❌ [PICK] Error:', e.message);
+          callback({ status: 'error', message: e.message });
+        }
+      });
+
+      // ========================
+      // MAIN BINGO - Register Cards (atomic, no duplicates)
+      // ========================
+      socket.on('mainBingoRegisterCards', async (data, callback) => {
+        const { cardIds } = data;
+        console.log(`💳 [REGISTER] ${socket.username} registering ${cardIds?.length} cards`);
+        
+        try {
+          const MainBingoGame = require('../models/MainBingoGame');
+          const MainBingoConfig = require('../models/MainBingoConfig');
+          const Card = require('../models/Card');
+          const User = require('../models/User');
+          
+          const game = await MainBingoGame.getActiveGame();
+          if (!game || (game.status !== 'setup' && game.status !== 'countdown')) {
+            return callback({ status: 'error', message: 'Game not accepting registrations' });
+          }
+          
+          const config = await MainBingoConfig.findById(game.configId);
+          const user = await User.findById(socket.userId);
+          
+          // Atomic update: only register cards still in 'preview' status
+          const result = await Card.updateMany(
+            { _id: { $in: cardIds }, userId: socket.userId, gameId: game._id, status: 'preview' },
+            { $set: { status: 'registered' } }
+          );
+          
+          if (result.modifiedCount !== cardIds.length) {
+            return callback({ 
+              status: 'error', 
+              message: `Only ${result.modifiedCount}/${cardIds.length} registered. Some may already be taken.` 
+            });
+          }
+          
+          const totalCost = config.cardPrice * cardIds.length;
+          if ((user.walletBalance || user.balance || 0) < totalCost) {
+            console.log('🔍 Balance check:', {
+  walletBalance: user.walletBalance,
+  balance: user.balance,
+  totalCost,
+  sufficient: (user.walletBalance || user.balance || 0) >= totalCost
+});
+            // Rollback
+            await Card.updateMany(
+              { _id: { $in: cardIds }, status: 'registered' },
+              { $set: { status: 'preview' } }
+            );
+            return callback({ status: 'error', message: 'Insufficient balance' });
+          }
+          
+          if (user.walletBalance !== undefined) {
+            user.walletBalance -= totalCost;
+          } else {
+            user.balance -= totalCost;
+          }
+          await user.save();
+          
+          game.totalCards = (game.totalCards || 0) + cardIds.length;
+          await game.save();
+          
+          const newBalance = user.walletBalance || user.balance;
+          
+          callback({ status: 'ok', registeredCount: cardIds.length, newBalance });
+          console.log(`✅ [REGISTER] ${socket.username} registered ${cardIds.length} cards. Balance: ${newBalance}`);
+          
+        } catch (e) {
+          console.error('❌ [REGISTER] Error:', e.message);
+          callback({ status: 'error', message: e.message });
+        }
+      });
+
+      // ========================
+      // MAIN BINGO - Call BINGO
+      // ========================
+      socket.on('mainBingoCallBingo', async (data) => {
+        const { roomId, cardId } = data;
+        console.log(`🎯 [MAIN BINGO] ${socket.username} calling BINGO on card ${cardId}`);
+        
+        try {
+          const result = await this.mainEngine.callBingo(socket.userId, cardId);
+          
+          if (result.success) {
+            socket.emit('mainBingoBingoAccepted', result);
+            
+            // Stop controller draw interval if exists
+            const MainBingoGame = require('../models/MainBingoGame');
+            const game = await MainBingoGame.getActiveGame();
+            if (game?.id && global.drawIntervals?.[game._id.toString()]) {
+              clearInterval(global.drawIntervals[game._id.toString()]);
+              delete global.drawIntervals[game._id.toString()];
+            }
+          } else {
+            socket.emit('mainBingoBingoRejected', result);
+          }
+        } catch (e) {
+          console.error('❌ [MAIN BINGO] Error:', e.message);
+          socket.emit('mainBingoBingoError', { message: e.message });
+        }
+      });
+
+      // ========================
+      // MAIN BINGO - Mark Number
+      // ========================
+      socket.on('markNumber', async (data) => {
+        try {
+          const Card = require('../models/Card');
+          const card = await Card.findOne({ _id: data.cardId, userId: socket.userId });
+          if (card && !card.isBlocked) {
+            const cell = card.grid[data.letter]?.find(c => c.number === data.number);
+            if (cell) {
+              cell.isMarked = !cell.isMarked;
+              await card.save();
+            }
+            socket.emit('mainBingoNumberMarked', { cardId: data.cardId, grid: card.grid });
+          }
+        } catch (e) {
+          socket.emit('mainBingoError', { message: e.message });
+        }
+      });
+
+      // ========================
       // FAST BINGO EVENTS
       // ========================
-      
       socket.on('buyCard', async (roomId) => {
         try {
           const result = await this.engine.cards.buyCard(roomId, socket.userId);
@@ -147,22 +372,10 @@ class GameSocket {
         }
       });
 
-      // 🔧 FIXED: registerCard with callback support
       socket.on('registerCard', async (data, callback) => {
         const { roomId, cardId } = data;
-        
-        console.log(`💳 [PURCHASE] ${socket.username} buying card ${cardId} in room ${roomId}`);
-        
         try {
-          // Pass callback to CardService so it can respond directly
-          const result = await this.engine.cards.registerCard(
-            roomId, 
-            socket.userId, 
-            cardId,
-            callback  // 🔑 Pass callback for instant response
-          );
-          
-          // If no callback was provided (older client), emit event
+          const result = await this.engine.cards.registerCard(roomId, socket.userId, cardId, callback);
           if (!callback) {
             socket.emit('cardRegistered', {
               status: 'ok',
@@ -171,23 +384,11 @@ class GameSocket {
               newBalance: result.newBalance
             });
           }
-          
-          console.log(`✅ [PURCHASE] Success: card ${result.cardNumber}`);
-          
         } catch (e) {
-          console.error(`❌ [PURCHASE] Failed:`, e.message);
-          
-          // Send error via callback if provided
           if (typeof callback === 'function') {
-            callback({
-              status: 'error',
-              message: e.message
-            });
+            callback({ status: 'error', message: e.message });
           } else {
-            // Fallback for older clients
-            socket.emit('cardPurchaseError', { 
-              message: e.message 
-            });
+            socket.emit('cardPurchaseError', { message: e.message });
           }
         }
       });
@@ -201,12 +402,9 @@ class GameSocket {
       });
 
       socket.on('previewCards', async (data) => {
-        console.log('🟡 [SOCKET] previewCards BATCH:', data);
         try {
-          const result = await this.engine.cards.previewCards(data.roomId, socket.userId, data.quantity);
-          console.log('🟡 [SOCKET] previewCards done:', result);
+          await this.engine.cards.previewCards(data.roomId, socket.userId, data.quantity);
         } catch (e) {
-          console.log('🟡 [SOCKET] previewCards error:', e.message);
           socket.emit('error', { message: e.message });
         }
       });

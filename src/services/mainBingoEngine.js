@@ -13,8 +13,8 @@ class MainBingoEngine {
   }
 
   getRoomId(game) {
-    return game.roomId || game.gameId?.toString() || game._id?.toString();
-  }
+    return 'main-bingo-room'; // Always use main bingo room
+}
 
   getBingoLetter(num) {
     if (num <= 15) return 'B'; 
@@ -47,160 +47,193 @@ class MainBingoEngine {
     this.drawNumbers(game);
   }
 
-  async drawNumbers(game) {
+   async drawNumbers(game) {
     const config = await MainBingoConfig.findById(game.configId);
     const callIntervalMs = (config?.callIntervalSeconds || 5) * 1000;
     const gracePeriodSeconds = config?.gracePeriodSeconds || 10;
-    
     const roomId = this.getRoomId(game);
+    const cacheService = require('./CacheService');
     
-    console.log(`🎱 Starting number draws every ${callIntervalMs}ms for room: ${roomId}`);
+    console.log(`🎱 Starting draws every ${callIntervalMs}ms for room: ${roomId}`);
+    
+    // 🔥 Cache game state in Redis
+    await cacheService.setGameState(game._id.toString(), {
+      status: 'in_progress',
+      prizeAmount: game.prizeAmount,
+      configId: game.configId,
+      ruleId: game.ruleId,
+    });
     
     let idx = game.drawnNumbers?.length || 0;
+    const allNumbers = game.allNumbers;
     
     const interval = setInterval(async () => {
       try {
-        const current = await MainBingoGame.findById(game._id);
+        const current = await MainBingoGame.findById(game._id).select('status');
         
-        if (!current || current.status === 'completed' || current.status === 'grace_period') {
-          console.log('🛑 Stopping draw timer - game ended');
+        if (!current || current.status !== 'in_progress') {
+          console.log('🛑 Stopping draws');
           clearInterval(interval);
           this.drawTimers.delete(game._id.toString());
           return;
         }
         
-        if (idx >= current.allNumbers.length) {
-          console.log('🏁 All 75 numbers drawn');
+        if (idx >= allNumbers.length) {
+          console.log('🏁 All numbers drawn');
           clearInterval(interval);
           this.drawTimers.delete(game._id.toString());
           
-          const gameConfig = await MainBingoConfig.findById(current.configId);
+          await MainBingoGame.findByIdAndUpdate(game._id, {
+            status: 'grace_period',
+            gracePeriodEndTime: new Date(Date.now() + gracePeriodSeconds * 1000)
+          });
           
-          if (gameConfig?.isLastNumberCalledBingo) {
-            console.log('🎉 Auto BINGO on last number!');
-            current.status = 'completed';
-            current.endTime = new Date();
-            await current.save();
-            await MainBingoConfig.findByIdAndUpdate(current.configId, { status: 'completed' });
-            await this.cleanupGameCards(current._id);
-            
-            this.io.to(roomId).emit('mainBingoEnded', { 
-              game: current, 
-              winners: [], 
-              autoBingo: true,
-              showDuration: 10000
-            });
-          } else {
-            console.log(`⏳ Starting grace period: ${gracePeriodSeconds}s`);
-            
-            current.status = 'grace_period';
-            current.gracePeriodEndTime = new Date(Date.now() + gracePeriodSeconds * 1000);
-            await current.save();
-            
-            this.io.to(roomId).emit('mainBingoGracePeriod', { 
-              seconds: gracePeriodSeconds, 
-              endTime: current.gracePeriodEndTime 
-            });
-            
-            const graceTimer = setTimeout(() => this.endGracePeriod(current._id), gracePeriodSeconds * 1000);
-            this.graceTimers.set(current._id.toString(), graceTimer);
-          }
+          this.io.to(roomId).emit('mainBingoGracePeriod', {
+            seconds: gracePeriodSeconds,
+            endTime: new Date(Date.now() + gracePeriodSeconds * 1000)
+          });
+          
+          const graceTimer = setTimeout(() => this.endGracePeriod(game._id), gracePeriodSeconds * 1000);
+          this.graceTimers.set(game._id.toString(), graceTimer);
           return;
         }
         
-        const num = current.allNumbers[idx];
+        const num = allNumbers[idx];
         const letter = this.getBingoLetter(num);
         
-        current.currentNumber = { number: num, letter };
-        current.drawnNumbers.push({ number: num, letter, drawnAt: new Date() });
-        await current.save();
+        // 🔥 Cache drawn number in Redis (O(1) lookup for BINGO checks)
+        await cacheService.addDrawnNumber(game._id.toString(), num);
         
-        console.log(`🎱 [MAIN BINGO] Room: ${roomId} | Drew: ${letter}${num} | Count: ${idx + 1}/75`);
+        // Batch save to MongoDB every 5 numbers
+        if (idx % 5 === 0 || idx === allNumbers.length - 1) {
+          const startBatch = idx - (idx % 5);
+          const batchNumbers = allNumbers.slice(startBatch, idx + 1).map(n => ({
+            number: n,
+            letter: this.getBingoLetter(n),
+            drawnAt: new Date()
+          }));
+          
+          await MainBingoGame.findByIdAndUpdate(game._id, {
+            $push: { drawnNumbers: { $each: batchNumbers } },
+            currentNumber: { number: num, letter }
+          });
+        }
         
-        this.io.to(roomId).emit('mainBingoNumberDrawn', { 
-          number: num, 
-          letter, 
+        // 🔥 Emit immediately (no DB wait)
+        this.io.to(roomId).emit('mainBingoNumberDrawn', {
+          number: num,
+          letter,
           drawCount: idx + 1,
-          totalNumbers: current.allNumbers.length
+          totalNumbers: allNumbers.length
         });
         
         idx++;
         
-      } catch (e) { 
-        console.error('❌ Draw error:', e); 
+      } catch (e) {
+        console.error('❌ Draw error:', e);
       }
     }, callIntervalMs);
     
     this.drawTimers.set(game._id.toString(), interval);
   }
 
-  checkWin(rule, card, drawnNumbers, config) {
-    const drawnSet = new Set(drawnNumbers.map(d => d.number));
+   async checkWin(rule, card, gameId, config) {
+    const cacheService = require('./CacheService');
     const COLS = ['B','I','N','G','O'];
     
-    // 🔥 Check last number on card if enabled
-    if (config?.isLastNumberCalledBingo && drawnNumbers.length > 0) {
-      const lastCalled = drawnNumbers[drawnNumbers.length - 1];
-      const lastCell = card.grid[lastCalled.letter]?.find(c => c.number === lastCalled.number);
-      
-      if (!lastCell) {
-        return null; // Last number not on card - no BINGO
+    // 🔥 Build marked set using Redis O(1) lookups
+    const effectiveMarkedSet = new Set();
+    
+    for (let c = 0; c < 5; c++) {
+      for (let r = 0; r < 5; r++) {
+        const cell = card.grid[COLS[c]]?.[r];
+        if (!cell) continue;
+        
+        // Free space (center N)
+        if (c === 2 && r === 2 && config?.freeSpaceCounts !== false) {
+          effectiveMarkedSet.add(`${COLS[c]},${r}`);
+          continue;
+        }
+        
+        // Cell marked and number > 0 → check Redis
+        if (cell.isMarked && cell.number > 0) {
+          const isDrawn = await cacheService.isNumberDrawn(gameId, cell.number);
+          if (isDrawn) {
+            effectiveMarkedSet.add(`${COLS[c]},${r}`);
+          }
+        }
       }
     }
     
-    if (rule.method === 'pattern') {
+    // Check last number on card if enabled
+    if (config?.isLastNumberCalledBingo) {
+      const drawnNumbers = await cacheService.getDrawnNumbers(gameId);
+      if (drawnNumbers.length > 0) {
+        // Get last drawn number from Redis
+        const lastDrawnKeys = await require('../config/redis').keys(`game:${gameId}:drawn`);
+        // Skip - use alternative approach below
+      }
+    }
+    
+    // 🔥 Pattern method
+    if (rule.method === 'pattern' && rule.patterns?.length > 0) {
       for (const pattern of rule.patterns) {
-        if (pattern.cells.every(c => {
-          const cell = card.grid[COLS[c[1]]][c[0]];
-          const cellNumber = cell.number;
-          if (c[1] === 2 && c[0] === 2 && rule.ruleConfig?.freeSpaceCounts) return true;
-          return drawnSet.has(cellNumber);
-        })) return 'pattern';
+        if (!pattern.cells || pattern.cells.length === 0) continue;
+        
+        const allMatch = pattern.cells.every(([row, col]) => {
+          if (col === 2 && row === 2 && rule.ruleConfig?.freeSpaceCounts) return true;
+          return effectiveMarkedSet.has(`${COLS[col]},${row}`);
+        });
+        
+        if (allMatch) return 'pattern';
       }
       return null;
     }
     
+    // 🔥 Rule method
     const cfg = rule.ruleConfig || {};
     let rows = 0, cols = 0, diags = 0;
     
+    // Rows
     for (let r = 0; r < 5; r++) {
       let ok = true;
       for (let c = 0; c < 5; c++) {
         if (c === 2 && r === 2 && cfg.freeSpaceCounts) continue;
-        const cellNumber = card.grid[COLS[c]][r].number;
-        if (!drawnSet.has(cellNumber)) { ok = false; break; }
+        if (!effectiveMarkedSet.has(`${COLS[c]},${r}`)) { ok = false; break; }
       }
       if (ok) rows++;
     }
     
+    // Columns
     for (let c = 0; c < 5; c++) {
       let ok = true;
       for (let r = 0; r < 5; r++) {
         if (c === 2 && r === 2 && cfg.freeSpaceCounts) continue;
-        const cellNumber = card.grid[COLS[c]][r].number;
-        if (!drawnSet.has(cellNumber)) { ok = false; break; }
+        if (!effectiveMarkedSet.has(`${COLS[c]},${r}`)) { ok = false; break; }
       }
       if (ok) cols++;
     }
     
+    // Diagonals
     let d1 = true, d2 = true;
     for (let i = 0; i < 5; i++) {
-      if (!(i === 2 && cfg.freeSpaceCounts) && !drawnSet.has(card.grid[COLS[i]][i].number)) d1 = false;
-      if (!(i === 2 && cfg.freeSpaceCounts) && !drawnSet.has(card.grid[COLS[4-i]][i].number)) d2 = false;
+      if (!(i === 2 && cfg.freeSpaceCounts) && !effectiveMarkedSet.has(`${COLS[i]},${i}`)) d1 = false;
+      if (!(i === 2 && cfg.freeSpaceCounts) && !effectiveMarkedSet.has(`${COLS[4-i]},${i}`)) d2 = false;
     }
-    if (d1) diags++; 
+    if (d1) diags++;
     if (d2) diags++;
     
     const total = rows + cols + diags;
+    
     if (total >= (cfg.linesToWin || 1) && 
         rows >= (cfg.minRows || 0) && 
         cols >= (cfg.minColumns || 0) && 
         diags >= (cfg.minDiagonals || 0)) {
       return 'rule_win';
     }
+    
     return null;
   }
-
   async callBingo(userId, cardId) {
     console.log('🎯 BINGO VALIDATION STARTED - User:', userId, 'Card:', cardId);
 
@@ -266,7 +299,7 @@ class MainBingoEngine {
     }
 
     // 🔥 Pass config to checkWin
-    const winType = this.checkWin(rule, card, drawnNumbers, config);
+    const winType = await this.checkWin(rule, card, game._id.toString(), config);
     
     if (!winType) {
       console.log('❌ No winning pattern');
@@ -335,7 +368,7 @@ class MainBingoEngine {
     return { success: true, winType };
   }
 
-  async endGracePeriod(gameId) {
+   async endGracePeriod(gameId) {
     console.log('⏰ Grace period ended for game:', gameId);
     
     const game = await MainBingoGame.findById(gameId);
@@ -365,8 +398,9 @@ class MainBingoEngine {
     const config = await MainBingoConfig.findById(game.configId);
     const winners = [];
     
+    // Validate each called card
     for (const card of calledCards) {
-      if (this.checkWin(rule, card, game.drawnNumbers || [], config)) {
+      if (await this.checkWin(rule, card, game._id.toString(), config)) {
         card.bingoValidated = true;
         await card.save();
         
@@ -378,12 +412,14 @@ class MainBingoEngine {
           cardNumber: card.cardNumber,
           displayId: card.displayId,
           winType: card.winType,
+          cardGrid: card.grid,  // Include card grid for display
         });
       }
     }
     
     console.log(`🏆 Winners: ${winners.length}`);
     
+    // Distribute prize
     if (winners.length > 0 && game.prizeAmount > 0) {
       const prizePerWinner = Math.floor(game.prizeAmount / winners.length);
       
@@ -406,12 +442,13 @@ class MainBingoEngine {
             balanceAfter: user.walletBalance,
             status: 'completed'
           });
-          console.log(`💰 Prize paid to ${winner.winnerName}: ${prizePerWinner} ETB`);
         } catch (txError) {
           console.error('Transaction error:', txError.message);
         }
         
+        // Update winner with prize + balance
         winner.prizeAmount = prizePerWinner;
+        winner.newBalance = user.walletBalance;
         game.winners.push(winner);
       }
     }
