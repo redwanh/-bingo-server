@@ -394,8 +394,9 @@ console.log(`🎱 Drew: ${letter}${num} | DB count: ${freshGame.drawnNumbers.len
           console.error('Transaction error:', txError.message);
         }
         
-        winner.prizeAmount = prizePerWinner;
-        game.winners.push(winner);
+            winner.prizeAmount = prizePerWinner;
+    winner.newBalance = user.walletBalance;  // ← MAKE SURE THIS EXISTS
+    game.winners.push(winner);
       }
     }
     
@@ -406,7 +407,12 @@ console.log(`🎱 Drew: ${letter}${num} | DB count: ${freshGame.drawnNumbers.len
     await MainBingoConfig.findByIdAndUpdate(game.configId, { status: 'completed', completedAt: new Date() });
     await this.cleanupGameCards(game._id);
     
-    this.io.to(roomId).emit('mainBingoEnded', { game, winners, showDuration: 10000 });
+  this.io.to(roomId).emit('mainBingoEnded', { 
+    game, 
+    winners, 
+    showDuration: 10000,
+    balance: winners.length > 0 ? winners[0].newBalance : 0
+});
     
     console.log('✅ Game completed');
   }

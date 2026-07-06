@@ -14,11 +14,8 @@ generateCode(channel = 'test') {
     if (channel === 'test') {
       return '1234';
     }
-    
     // Real random code for Telegram/SMS
-    const code = String(Math.floor(1000 + Math.random() * 9000));
-    console.log('🔍 [OTP] Generated random code:', code, 'for channel:', channel);
-    return code;
+    return String(Math.floor(1000 + Math.random() * 9000));
 }
 
 
@@ -79,9 +76,10 @@ console.log('🔍 [OTP] sendOTP - channel:', channel, 'code:', code, 'phone:', p
 
     try {
       if (channel === 'telegram') {
-       // await telegramService.sendOTP(phone, code);
-        console.log('⚠️ Telegram not configured, using test code');
-        sendResult = { success: true, provider: 'telegram' };
+    const telegramService = require('./telegramService');
+    await telegramService.sendOTP(phone, code);
+    sendResult = { success: true, provider: 'telegram' };
+
       } else if (channel === 'sms') {
         sendResult = await smsService.send(phone, message);
       }

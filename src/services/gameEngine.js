@@ -2175,198 +2175,114 @@ class GameEngine {
    * @param {string} roomId - Room ID
    * @param {string} gameId - Game MongoDB ID
    */
-  async endGracePeriod(roomId, gameId) {
-    divider();
-    log(`\n⏰ [GRACE PERIOD END] Game: ${gameId}, Room: ${roomId}`);
-
-    const game = await Game.findById(gameId);
-    if (!game || game.status === "completed") {
-      log(`   Game already completed`);
+  async endGracePeriod(gameId) {
+    console.log('⏰ Grace period ended for game:', gameId);
+    
+    const game = await MainBingoGame.findById(gameId);
+    if (!game || game.status === 'completed') {
+      console.log('⚠️ Game already completed');
       return;
     }
-
-    const config = await GameConfig.findOne({ roomId: game.roomId });
-    const calledCards = await Card.find({
-      gameId: game._id,
-      bingoCalled: true,
-      isBlocked: false,
-    }).populate("userId");
-
-    log(`   Called cards: ${calledCards.length}`);
-    log(`   Prize pool: ${game.prizePool} ETB`);
-    log(`   Commission: ${config?.commissionPercentage || 10}%`);
-
+    
+    const roomId = this.getRoomId(game);
+    
+    if (this.drawTimers.has(game._id.toString())) {
+      clearInterval(this.drawTimers.get(game._id.toString()));
+      this.drawTimers.delete(game._id.toString());
+    }
+    if (this.graceTimers.has(game._id.toString())) {
+      clearTimeout(this.graceTimers.get(game._id.toString()));
+      this.graceTimers.delete(game._id.toString());
+    }
+    
+    const calledCards = await Card.find({ 
+      gameId: game._id, 
+      bingoCalled: true, 
+      isBlocked: false 
+    }).populate('userId', 'fullName phone walletBalance');
+    
+    const rule = await MainBingoRule.findById(game.ruleId);
+    const config = await MainBingoConfig.findById(game.configId);
     const winners = [];
+    
+    // Validate each called card
     for (const card of calledCards) {
-      // FIXED: Pass config.winRule as 4th parameter for win rule validation
-      const wt = this.checkWin(card, game.drawnNumbers, config, config.winRule);
-      if (wt) {
+      if (this.checkWin(rule, card, game.drawnNumbers || [], config)) {
         card.bingoValidated = true;
         await card.save();
-        winners.push({ card, winType: wt });
-      }
-    }
-
-    log(`   Validated winners: ${winners.length}`);
-
-    if (winners.length > 0) {
-      const commissionRate = config?.commissionPercentage || 10;
-      const comm = (game.prizePool * commissionRate) / 100;
-      const ppw = (game.prizePool - comm) / winners.length;
-
-      log(`\n💰 PRIZE CALCULATION:`);
-      log(`   Prize pool: ${game.prizePool} ETB`);
-      log(`   Commission (${commissionRate}%): ${comm} ETB`);
-      log(`   Prize per winner: ${ppw} ETB`);
-      log(`   Total payout: ${ppw * winners.length} ETB`);
-
-      for (const { card, winType } of winners) {
-        const user = card.userId;
-        const oldBalance = user.walletBalance || 0;
-        await User.findByIdAndUpdate(user._id, {
-          $inc: { walletBalance: ppw },
-        });
-        const updatedUser = await User.findById(user._id);
-
-        log(
-          `   🏆 Winner: ${user.fullName} - ${oldBalance} → ${updatedUser.walletBalance} (+${ppw} ETB) - ${winType}`,
-        );
-
-        await Transaction.create({
-          userId: user._id,
-          type: "prize_win",
-          amount: ppw,
-          gameId: game.gameId,
-          gameNumber: game.gameNumber,
-          description: `Won with ${winType}`,
-          balanceAfter: updatedUser.walletBalance,
-        });
-
-        game.winners.push({
-          userId: user._id,
+        
+        winners.push({
+          userId: card.userId._id,
           cardId: card._id,
-          winType,
-          prizeAmount: ppw,
-          winnerName: user.fullName,
-          winnerPhone: user.phone,
+          winnerName: card.userId.fullName,
+          winnerPhone: card.userId.phone,
           cardNumber: card.cardNumber,
+          displayId: card.displayId,
+          winType: card.winType,
           cardGrid: card.grid,
-          newBalance: updatedUser.walletBalance,
         });
-
-        await this.sendWinningNotification(
-          user._id,
-          ppw,
-          game.gameNumber,
-          winType,
-        );
       }
-
-      await Transaction.create({
-        type: "commission",
-        amount: comm,
-        gameId: game.gameId,
-        gameNumber: game.gameNumber,
-        description: "Commission",
-      });
-      game.commission = comm;
-
-      log(`\n📡 Emitting gameEnded with winners and balances`);
-    } else {
-      log(`   No valid winners found`);
     }
-
-    game.status = "completed";
+    
+    console.log(`🏆 Winners: ${winners.length}`);
+    
+    // Distribute prize
+    if (winners.length > 0 && game.prizeAmount > 0) {
+      const prizePerWinner = Math.floor(game.prizeAmount / winners.length);
+      
+      for (const winner of winners) {
+        const user = await User.findById(winner.userId);
+        const balanceBefore = user.walletBalance || 0;
+        
+        user.walletBalance = balanceBefore + prizePerWinner;
+        await user.save();
+        
+        try {
+          await Transaction.create({
+            userId: winner.userId,
+            type: 'prize_win',
+            amount: prizePerWinner,
+            gameId: game._id,
+            cardId: winner.cardId,
+            description: `BINGO win - Game #${game.gameNumber}`,
+            balanceBefore: balanceBefore,
+            balanceAfter: user.walletBalance,
+            status: 'completed'
+          });
+          console.log(`💰 Prize paid to ${winner.winnerName}: ${prizePerWinner} ETB`);
+        } catch (txError) {
+          console.error('Transaction error:', txError.message);
+        }
+        
+        // 🔥 Set newBalance BEFORE pushing
+        winner.prizeAmount = prizePerWinner;
+        winner.newBalance = user.walletBalance;
+        game.winners.push(winner);
+      }
+    }
+    
+    game.status = 'completed';
     game.endTime = new Date();
     await game.save();
-    console.log("✅ Game saved as completed (grace period)");
-
-    // Reset ALL 400 seeded cards (displayId 10001-10400)
-    const resetResult = await Card.updateMany(
-      { displayId: { $gte: 10001, $lte: 10400 } },
-      {
-        $set: {
-          status: "available",
-          userId: null,
-          gameId: null,
-          isBlocked: false,
-          bingoCalled: false,
-        },
-      },
-    );
-    console.log(
-      `🃏 Card reset: ${resetResult.modifiedCount} cards set to available`,
-    );
-
-    // Reset grid marks for all 400 cards
-    const allCards = await Card.find({
-      displayId: { $gte: 10001, $lte: 10400 },
-    });
-    console.log(`🃏 Found ${allCards.length} cards to reset grid marks`);
-
-    for (const c of allCards) {
-      ["B", "I", "N", "G", "O"].forEach((col) => {
-        if (c.grid[col]) {
-          c.grid[col] = c.grid[col].map((cell) => ({
-            ...cell,
-            isMarked: cell.number === 0 ? true : false,
-          }));
-        }
-      });
-      await c.save();
-    }
-    console.log("✅ Grid marks reset complete");
-
-    timerManager.clearInterval(`draw_${roomId}`);
-    timerManager.clearTimeout(`grace_${roomId}`);
-
-       // 🔥 Emit game ended with actual winners
-    const winnerData = game.winners.map(w => ({
-      userId: w.userId,
-      cardId: w.cardId,
-      winnerName: w.winnerName,
-      winnerPhone: w.winnerPhone,
-      cardNumber: w.cardNumber,
-      prizeAmount: w.prizeAmount,
-      winType: w.winType,
-      newBalance: w.newBalance
-    }));
-
-    this.io.to(roomId).emit("mainBingoEnded", {
-      gameId: game._id,
-      gameNumber: game.gameNumber,
-      winners: winnerData,
-      prizePool: game.prizePool,
-      commission: game.commission || 0,
-      totalWinners: winners.length,
-      timestamp: new Date().toISOString(),
+    
+    await MainBingoConfig.findByIdAndUpdate(game.configId, { status: 'completed', completedAt: new Date() });
+    await this.cleanupGameCards(game._id);
+    
+    // 🔍 DEBUG
+    console.log('🔍 [MAIN BINGO] Winners before emit:');
+    winners.forEach((w, i) => {
+      console.log(`   ${i}: ${w.winnerName} | prize=${w.prizeAmount} | newBalance=${w.newBalance}`);
     });
     
-    log(`📡 Emitted mainBingoEnded with ${winnerData.length} winners`);
-
-    log(`✅ Game #${game.gameNumber} completed`);
-    divider();
-
-    setTimeout(async () => {
-      const conf = await GameConfig.findOne({ roomId: game.roomId });
-      if (conf) {
-        const ln = await Game.getLatestGameNumber(roomId);
-        const ng = await Game.create({
-          gameId: String(ln + 1).padStart(10, "0"),
-          gameNumber: ln + 1,
-          roomId,
-          status: "scheduled",
-          allNumbers: this.shuffleNumbers(),
-          timerDuration: conf.waitTimeSeconds,
-        });
-        this.games.set(roomId, ng);
-        this.io.to(roomId).emit("newGameCreated", {
-          gameId: ng.gameId,
-          gameNumber: ng.gameNumber,
-        });
-        log(`🆕 New game #${ng.gameNumber} created`);
-      }
-    }, 5000);
+    // 🔥 Emit with winners data including newBalance
+    this.io.to(roomId).emit('mainBingoEnded', { 
+      game, 
+      winners, 
+      showDuration: 10000,
+      balance: winners.length > 0 ? winners[0].newBalance : 0
+    });
+    
+    console.log('✅ Game completed');
   }
 
   /**

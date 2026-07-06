@@ -53,13 +53,14 @@ exports.setupGame = async (req, res) => {
     
     const io = req.app.get('io');
 // 🔥 Emit unified gameState to all players in room
-const state = await exports.getStateForSocket(null); // Get state without user
+const state = await exports.getStateForSocket(null);
 state.active = true;
 state.game = game;
 state.config = config;
 state.rule = rule;
 state.myCards = [];
-state.balance = 0;
+// 🔥 Don't set balance to 0 - remove or skip it
+delete state.balance;  // ← ADD THIS
 io.to(ROOM).emit('gameState', state);
 console.log('📡 Emitted gameState for new game setup');
 res.json({ success: true, config, game });
