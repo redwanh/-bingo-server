@@ -358,9 +358,9 @@ console.log(`🎱 Drew: ${letter}${num} | DB count: ${freshGame.drawnNumbers.len
     cardNumber: card.cardNumber,
     displayId: card.displayId,
     winType: card.winType,
-    prizeAmount: prizePerWinner,
+    
     cardGrid: card.grid,                    // ← ADD
-    newBalance: user.walletBalance,         // ← ADD (user is already fetched above)
+        // ← ADD (user is already fetched above)
 });
       }
     }
