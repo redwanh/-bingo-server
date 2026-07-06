@@ -215,9 +215,7 @@ exports.getState = async (req, res) => {
     if (!game) return res.json({ active: false, message: 'No active game' });
 
     const rule = await MainBingoRule.findById(game.ruleId)
-      .select('name description method ruleConfig samples patterns ' +
-              'nameAmharic nameTigrinya nameOromo nameChinese nameEnglish ' +
-              'descriptionAmharic descriptionTigrinya descriptionOromo descriptionChinese descriptionEnglish');
+  .select('name nameAmharic nameTigrinya nameOromo nameChinese nameEnglish description descriptionAmharic descriptionTigrinya descriptionOromo descriptionChinese descriptionEnglish method ruleConfig patterns');
 
     const config = await MainBingoConfig.findById(game.configId);
     const myCards = await Card.find({ gameId: game._id, userId: req.user.id });
@@ -377,8 +375,7 @@ exports.getStateForSocket = async (userId) => {
     descriptionTigrinya: rule.descriptionTigrinya || '',
     descriptionOromo: rule.descriptionOromo || '',
     descriptionChinese: rule.descriptionChinese || '',
-  const rule = await MainBingoRule.findById(game.ruleId)
-  .select('name nameAmharic nameTigrinya nameOromo nameChinese nameEnglish description descriptionAmharic descriptionTigrinya descriptionOromo descriptionChinese descriptionEnglish method ruleConfig patterns');
+    descriptionEnglish: rule.descriptionEnglish || '',
     method: rule.method,
     ruleConfig: rule.ruleConfig,
     patterns: rule.patterns || []
