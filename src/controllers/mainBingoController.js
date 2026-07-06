@@ -36,6 +36,7 @@ exports.setupGame = async (req, res) => {
       noOfPlayersToStart: noOfPlayersToStart || 2,
       minimumCardsToStart: minimumCardsToStart || 1,
       minimumPrizeThreshold: minimumPrizeThreshold || 100,
+      isLastNumberCalledBingo: isLastNumberCalledBingo || false,
       createdBy: req.user.id 
     });
     

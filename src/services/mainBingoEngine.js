@@ -112,9 +112,36 @@ console.log(`🎱 Drew: ${letter}${num} | DB count: ${freshGame.drawnNumbers.len
     
     this.drawTimers.set(game._id.toString(), interval);
   }
-    checkWin(rule, card, drawnNumbers, config) {
+checkWin(rule, card, drawnNumbers, config) {
     const drawnSet = new Set(drawnNumbers.map(d => d.number));
     const COLS = ['B','I','N','G','O'];
+    
+    console.log('🔍 [CHECKWIN] ========== START ==========');
+    console.log('🔍 [CHECKWIN] Rule method:', rule?.method);
+    console.log('🔍 [CHECKWIN] isLastNumberCalledBingo:', config?.isLastNumberCalledBingo);
+    console.log('🔍 [CHECKWIN] Total drawn:', drawnNumbers.length);
+    
+    // 🔥 Last number must be on card (if enabled)
+    if (config?.isLastNumberCalledBingo && drawnNumbers.length > 0) {
+      const lastCalled = drawnNumbers[drawnNumbers.length - 1];
+      console.log('🔍 [CHECKWIN] Last called:', lastCalled.letter + lastCalled.number);
+      console.log('🔍 [CHECKWIN] Card column ' + lastCalled.letter + ':', 
+      card.grid[lastCalled.letter]?.map(c => c.number));
+      
+      const lastCell = card.grid[lastCalled.letter]?.find(c => c.number === lastCalled.number);
+      console.log('🔍 [CHECKWIN] Last number on card:', !!lastCell);
+      
+      if (!lastCell) {
+        console.log('🔍 [CHECKWIN] ❌ FALSE BINGO - Last number not on card');
+        console.log('🔍 [CHECKWIN] ========== END ==========');
+        return null;
+      }
+      console.log('🔍 [CHECKWIN] ✅ Last number found on card');
+    } else if (config?.isLastNumberCalledBingo) {
+      console.log('🔍 [CHECKWIN] ⚠️ No numbers drawn yet');
+    } else {
+      console.log('🔍 [CHECKWIN] ⏭️ Last number check DISABLED');
+    }
     
     console.log('🔍 [CHECKWIN] Drawn numbers:', [...drawnSet].sort((a,b)=>a-b).join(', '));
     
@@ -127,27 +154,39 @@ console.log(`🎱 Drew: ${letter}${num} | DB count: ${freshGame.drawnNumbers.len
         
         if (c === 2 && r === 2 && config?.freeSpaceCounts !== false) {
           effectiveMarked.add(`${c},${r}`);
+          console.log(`🔍 [CHECKWIN] FREE: ${COLS[c]}${r}`);
           continue;
         }
         
         if (cell.isMarked && cell.number > 0 && drawnSet.has(cell.number)) {
           effectiveMarked.add(`${c},${r}`);
+          console.log(`🔍 [CHECKWIN] MATCH: ${COLS[c]}${r} num=${cell.number} ✅`);
+        } else if (cell.isMarked && cell.number > 0 && !drawnSet.has(cell.number)) {
+          console.log(`🔍 [CHECKWIN] MARKED-NOT-DRAWN: ${COLS[c]}${r} num=${cell.number} ❌`);
         }
       }
     }
     
+    console.log('🔍 [CHECKWIN] Effective marked cells:', effectiveMarked.size);
+    
     // Pattern check
     if (rule.method === 'pattern' && rule.patterns?.length > 0) {
+      console.log('🔍 [CHECKWIN] Checking ' + rule.patterns.length + ' patterns');
       for (const pattern of rule.patterns) {
-        if (pattern.cells.every(([row, col]) => effectiveMarked.has(`${col},${row}`))) {
+        const match = pattern.cells.every(([row, col]) => effectiveMarked.has(`${col},${row}`));
+        console.log('🔍 [CHECKWIN] Pattern "' + (pattern.name || 'unnamed') + '":', match ? 'MATCH ✅' : 'no match ❌');
+        if (match) {
+          console.log('🔍 [CHECKWIN] ========== WIN (pattern) ==========');
           return 'pattern';
         }
       }
+      console.log('🔍 [CHECKWIN] ========== NO PATTERN MATCH ==========');
       return null;
     }
     
     // Line check
     const cfg = rule.ruleConfig || {};
+    console.log('🔍 [CHECKWIN] Line check - linesToWin:', cfg.linesToWin || 1);
     let rows = 0, cols = 0, diags = 0;
     
     for (let r = 0; r < 5; r++) {
@@ -156,7 +195,10 @@ console.log(`🎱 Drew: ${letter}${num} | DB count: ${freshGame.drawnNumbers.len
         if (c === 2 && r === 2 && cfg.freeSpaceCounts) continue;
         if (!effectiveMarked.has(`${c},${r}`)) { ok = false; break; }
       }
-      if (ok) rows++;
+      if (ok) { 
+        rows++; 
+        console.log(`🔍 [CHECKWIN] Row ${r} COMPLETE ✅`); 
+      }
     }
     
     for (let c = 0; c < 5; c++) {
@@ -165,7 +207,10 @@ console.log(`🎱 Drew: ${letter}${num} | DB count: ${freshGame.drawnNumbers.len
         if (c === 2 && r === 2 && cfg.freeSpaceCounts) continue;
         if (!effectiveMarked.has(`${c},${r}`)) { ok = false; break; }
       }
-      if (ok) cols++;
+      if (ok) { 
+        cols++; 
+        console.log(`🔍 [CHECKWIN] Col ${c} COMPLETE ✅`); 
+      }
     }
     
     let d1 = true, d2 = true;
@@ -173,14 +218,24 @@ console.log(`🎱 Drew: ${letter}${num} | DB count: ${freshGame.drawnNumbers.len
       if (!(i === 2 && cfg.freeSpaceCounts) && !effectiveMarked.has(`${i},${i}`)) d1 = false;
       if (!(i === 2 && cfg.freeSpaceCounts) && !effectiveMarked.has(`${4-i},${i}`)) d2 = false;
     }
-    if (d1) diags++; if (d2) diags++;
+    if (d1) { diags++; console.log('🔍 [CHECKWIN] Diagonal 1 COMPLETE ✅'); }
+    if (d2) { diags++; console.log('🔍 [CHECKWIN] Diagonal 2 COMPLETE ✅'); }
     
     const total = rows + cols + diags;
-    if (total >= (cfg.linesToWin || 1) && rows >= (cfg.minRows || 0) && cols >= (cfg.minColumns || 0) && diags >= (cfg.minDiagonals || 0)) {
+    console.log(`🔍 [CHECKWIN] Lines: rows=${rows} cols=${cols} diags=${diags} total=${total} needed=${cfg.linesToWin || 1}`);
+    console.log(`🔍 [CHECKWIN] Min checks: rows>=${cfg.minRows || 0} cols>=${cfg.minColumns || 0} diags>=${cfg.minDiagonals || 0}`);
+    
+    if (total >= (cfg.linesToWin || 1) && 
+        rows >= (cfg.minRows || 0) && 
+        cols >= (cfg.minColumns || 0) && 
+        diags >= (cfg.minDiagonals || 0)) {
+      console.log('🔍 [CHECKWIN] ========== WIN (rule_win) ==========');
       return 'rule_win';
     }
+    
+    console.log('🔍 [CHECKWIN] ========== NO WIN ==========');
     return null;
-  }
+}
   async callBingo(userId, cardId) {
     console.log('🎯 BINGO VALIDATION STARTED - User:', userId, 'Card:', cardId);
 
