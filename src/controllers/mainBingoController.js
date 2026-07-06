@@ -330,7 +330,7 @@ exports.getStateForSocket = async (userId) => {
     if (!game) return { active: false, message: 'No active game' };
 
     const rule = await MainBingoRule.findById(game.ruleId)
-      .select('name description method ruleConfig patterns');
+  .select('name nameAmharic nameTigrinya nameOromo nameChinese nameEnglish description descriptionAmharic descriptionTigrinya descriptionOromo descriptionChinese descriptionEnglish method ruleConfig patterns');
     const config = await MainBingoConfig.findById(game.configId);
     
     // Get ALL user's cards for this game (both preview and registered)
