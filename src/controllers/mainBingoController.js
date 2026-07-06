@@ -377,7 +377,8 @@ exports.getStateForSocket = async (userId) => {
     descriptionTigrinya: rule.descriptionTigrinya || '',
     descriptionOromo: rule.descriptionOromo || '',
     descriptionChinese: rule.descriptionChinese || '',
-    descriptionEnglish: rule.descriptionEnglish || '',
+  const rule = await MainBingoRule.findById(game.ruleId)
+  .select('name nameAmharic nameTigrinya nameOromo nameChinese nameEnglish description descriptionAmharic descriptionTigrinya descriptionOromo descriptionChinese descriptionEnglish method ruleConfig patterns');
     method: rule.method,
     ruleConfig: rule.ruleConfig,
     patterns: rule.patterns || []
