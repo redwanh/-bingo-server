@@ -292,31 +292,23 @@ class GameSocket {
       // ========================
       // MAIN BINGO - Call BINGO
       // ========================
-      socket.on('mainBingoCallBingo', async (data) => {
-        const { roomId, cardId } = data;
-        console.log(`🎯 [MAIN BINGO] ${socket.username} calling BINGO on card ${cardId}`);
-        
-        try {
-          const result = await this.mainEngine.callBingo(socket.userId, cardId);
-          
-          if (result.success) {
-            socket.emit('mainBingoBingoAccepted', result);
-            
-            // Stop controller draw interval if exists
-            const MainBingoGame = require('../models/MainBingoGame');
-            const game = await MainBingoGame.getActiveGame();
-            if (game?.id && global.drawIntervals?.[game._id.toString()]) {
-              clearInterval(global.drawIntervals[game._id.toString()]);
-              delete global.drawIntervals[game._id.toString()];
-            }
-          } else {
-            socket.emit('mainBingoBingoRejected', result);
-          }
-        } catch (e) {
-          console.error('❌ [MAIN BINGO] Error:', e.message);
-          socket.emit('mainBingoBingoError', { message: e.message });
-        }
-      });
+     socket.on('mainBingoCallBingo', async (data) => {
+    const { roomId, cardId } = data;
+    console.log(`🎯 [MAIN BINGO] ${socket.username} calling BINGO on card ${cardId}`);
+    
+    try {
+      const result = await this.mainEngine.callBingo(socket.userId, cardId);
+      
+      if (result.success) {
+        socket.emit('mainBingoBingoAccepted', result);
+      } else {
+        socket.emit('mainBingoBingoRejected', result);
+      }
+    } catch (e) {
+      console.error('❌ [MAIN BINGO] Error:', e.message);
+      socket.emit('mainBingoBingoError', { message: e.message });
+    }
+});
 
       // ========================
       // MAIN BINGO - Mark Number
