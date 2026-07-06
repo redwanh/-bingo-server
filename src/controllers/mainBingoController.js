@@ -364,14 +364,24 @@ exports.getStateForSocket = async (userId) => {
         callIntervalSeconds: config?.callIntervalSeconds || 5,
         gracePeriodSeconds: config?.gracePeriodSeconds || 10
       },
-      rule: rule ? {
-        _id: rule._id,
-        name: rule.name,
-        description: rule.description,
-        method: rule.method,
-        ruleConfig: rule.ruleConfig,
-        patterns: rule.patterns || []
-      } : null,
+     rule: rule ? {
+    _id: rule._id,
+    name: rule.name,
+    nameAmharic: rule.nameAmharic || '',
+    nameTigrinya: rule.nameTigrinya || '',
+    nameOromo: rule.nameOromo || '',
+    nameChinese: rule.nameChinese || '',
+    nameEnglish: rule.nameEnglish || '',
+    description: rule.description,
+    descriptionAmharic: rule.descriptionAmharic || '',
+    descriptionTigrinya: rule.descriptionTigrinya || '',
+    descriptionOromo: rule.descriptionOromo || '',
+    descriptionChinese: rule.descriptionChinese || '',
+    descriptionEnglish: rule.descriptionEnglish || '',
+    method: rule.method,
+    ruleConfig: rule.ruleConfig,
+    patterns: rule.patterns || []
+} : null,
       myCards: myCards || [],
       balance: user?.walletBalance || user?.balance || 0,
       totalCards: await Card.countDocuments({ gameId: game._id, status: 'registered' }),
