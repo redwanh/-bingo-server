@@ -10,7 +10,10 @@ const generateAccessToken = (userId, role) => {
 
 const generateRefreshToken = (userId) => {
   return jwt.sign(
-    { id: userId },
+    { 
+      id: userId,
+      jti: Date.now().toString(36) + Math.random().toString(36).substr(2, 9)
+    },
     process.env.JWT_REFRESH_SECRET,
     { expiresIn: process.env.JWT_REFRESH_EXPIRE || '7d' }
   );

@@ -281,16 +281,42 @@ exports.pickCards = async (req, res) => {
     if (quantity > maxAllowed) 
       return res.status(400).json({ error: `Max ${maxAllowed} more cards` });
     
-    // ✅ RANDOM & FAST: Use MongoDB aggregation with $sample
-    const availableCards = await Card.aggregate([
-      { $match: { gameId: null, userId: null, status: 'preview' } },
-      { $sample: { size: quantity } }
-    ]);
+    // 🔥 Check for favorite cards in pool first
+    const user = await User.findById(req.user.id);
+    const favoriteDisplayIds = (user.favoriteCartelas || []).map(f => f.displayId);
     
-    if (availableCards.length < quantity) 
-      return res.status(400).json({ error: `Only ${availableCards.length} cards left` });
+    let selectedCards = [];
+    
+    if (favoriteDisplayIds.length > 0) {
+      // Find favorites that are still in the pool
+      const favoriteCards = await Card.find({
+        displayId: { $in: favoriteDisplayIds },
+        gameId: null,
+        userId: null,
+        status: 'preview'
+      }).limit(quantity);
+      
+      if (favoriteCards.length > 0) {
+        selectedCards = favoriteCards;
+        console.log(`⭐ Found ${favoriteCards.length} favorite cartelas in pool for user`);
+      }
+    }
+    
+    // If favorites don't fill the quantity, get random cards for the rest
+    const remaining = quantity - selectedCards.length;
+    
+    if (remaining > 0) {
+      const randomCards = await Card.aggregate([
+        { $match: { gameId: null, userId: null, status: 'preview', _id: { $nin: selectedCards.map(c => c._id) } } },
+        { $sample: { size: remaining } }
+      ]);
+      selectedCards = [...selectedCards, ...randomCards];
+    }
+    
+    if (selectedCards.length < quantity) 
+      return res.status(400).json({ error: `Only ${selectedCards.length} cards left` });
 
-    const cardIds = availableCards.map(c => c._id);
+    const cardIds = selectedCards.map(c => c._id);
     
     await Card.updateMany(
       { _id: { $in: cardIds } }, 

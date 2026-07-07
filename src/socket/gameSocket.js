@@ -144,21 +144,51 @@ class GameSocket {
           const actualQty = Math.min(quantity, maxAllowed);
           
           // 🔥 Try pool first
-          let availableCards = await Card.aggregate([
-            { $match: { gameId: null, userId: null, status: 'preview' } },
-            { $sample: { size: actualQty } }
-          ]);
+                    // 🔥 FAVORITE CARTELAS FIRST
+          const User = require('../models/User');
+          const user = await User.findById(socket.userId);
+          const favoriteDisplayIds = (user.favoriteCartelas || []).map(f => f.displayId);
+          
+          let availableCards = [];
+          const existingIds = [];
+          
+          if (favoriteDisplayIds.length > 0) {
+            const favoriteCards = await Card.find({
+              displayId: { $in: favoriteDisplayIds },
+              gameId: null,
+              userId: null,
+              status: 'preview'
+            }).limit(actualQty);
+            
+            if (favoriteCards.length > 0) {
+              availableCards = favoriteCards;
+              existingIds.push(...favoriteCards.map(c => c._id));
+              console.log(`⭐ ${favoriteCards.length} favorite cartelas found for ${socket.username}`);
+            }
+          }
+          
+          // If favorites don't fill the quantity, get random from pool
+          if (availableCards.length < actualQty) {
+            const remaining = actualQty - availableCards.length;
+            const randomCards = await Card.aggregate([
+              { $match: { gameId: null, userId: null, status: 'preview', _id: { $nin: existingIds } } },
+              { $sample: { size: remaining } }
+            ]);
+            availableCards = [...availableCards, ...randomCards];
+          }
           
           // 🔥 If pool is empty, raid unregistered preview cards from other users
+                    // 🔥 If pool is empty, raid unregistered preview cards from other users
           if (availableCards.length === 0) {
-            console.log('🔄 Pool empty! Raiding unregistered preview cards...');
+            console.log('🔄 Pool empty! Raiding...');
             
             availableCards = await Card.aggregate([
               { 
                 $match: { 
                   gameId: game._id, 
                   status: 'preview',
-                  userId: { $ne: socket.userId } // Don't take from same user
+                  userId: { $ne: socket.userId },
+                  _id: { $nin: existingIds }
                 } 
               },
               { $sample: { size: actualQty } }
