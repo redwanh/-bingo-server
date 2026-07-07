@@ -26,8 +26,29 @@ const userSchema = new mongoose.Schema({
   preferences: {
     language: { type: String, default: 'en' },
     notifications: { type: Boolean, default: true }
-  }
+  },
+    // Spending limits
+  spendingLimits: {
+    enabled: { type: Boolean, default: false },
+    daily: { type: Number, default: 0 },
+    weekly: { type: Number, default: 0 },
+    monthly: { type: Number, default: 0 },
+  },
+  spendingUsage: {
+    daily: { type: Number, default: 0 },
+    dailyReset: { type: Date },
+    weekly: { type: Number, default: 0 },
+    weeklyReset: { type: Date },
+    monthly: { type: Number, default: 0 },
+    monthlyReset: { type: Date },
+  },
+   favoriteCartelas: [{
+    displayId: Number,
+    cardId: String,
+    savedAt: { type: Date, default: Date.now }
+  }],
 }, { timestamps: true });
+
 
 userSchema.pre('save', async function(next) {
   if (!this.isModified('password')) return next();

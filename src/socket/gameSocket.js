@@ -221,6 +221,9 @@ class GameSocket {
       // ========================
       // MAIN BINGO - Register Cards (atomic, no duplicates)
       // ========================
+           // ========================
+      // MAIN BINGO - Register Cards (atomic, no duplicates + spending limits)
+      // ========================
       socket.on('mainBingoRegisterCards', async (data, callback) => {
         const { cardIds } = data;
         console.log(`💳 [REGISTER] ${socket.username} registering ${cardIds?.length} cards`);
@@ -230,6 +233,7 @@ class GameSocket {
           const MainBingoConfig = require('../models/MainBingoConfig');
           const Card = require('../models/Card');
           const User = require('../models/User');
+          const Notification = require('../models/Notification');
           
           const game = await MainBingoGame.getActiveGame();
           if (!game || (game.status !== 'setup' && game.status !== 'countdown')) {
@@ -238,6 +242,49 @@ class GameSocket {
           
           const config = await MainBingoConfig.findById(game.configId);
           const user = await User.findById(socket.userId);
+          
+          const totalCost = config.cardPrice * cardIds.length;
+          
+          // 🔥 CHECK SPENDING LIMITS
+          const limits = user.spendingLimits || {};
+          const usage = user.spendingUsage || {};
+          const now = new Date();
+          const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+          
+          // Reset daily
+          if (!usage.dailyReset || now > new Date(usage.dailyReset)) {
+            usage.daily = 0;
+            usage.dailyReset = new Date(today.getTime() + 24*60*60*1000);
+          }
+          // Reset weekly
+          const weekStart = new Date(today);
+          weekStart.setDate(today.getDate() - today.getDay());
+          if (!usage.weeklyReset || now > new Date(usage.weeklyReset)) {
+            usage.weekly = 0;
+            usage.weeklyReset = new Date(weekStart.getTime() + 7*24*60*60*1000);
+          }
+          // Reset monthly
+          if (!usage.monthlyReset || now > new Date(usage.monthlyReset)) {
+            usage.monthly = 0;
+            usage.monthlyReset = new Date(now.getFullYear(), now.getMonth()+1, 1);
+          }
+          
+          if (limits.enabled) {
+            if (limits.daily > 0 && (usage.daily + totalCost) > limits.daily) {
+              return callback({ status: 'error', message: `Daily spending limit reached (${limits.daily} ETB)` });
+            }
+            if (limits.weekly > 0 && (usage.weekly + totalCost) > limits.weekly) {
+              return callback({ status: 'error', message: `Weekly spending limit reached (${limits.weekly} ETB)` });
+            }
+            if (limits.monthly > 0 && (usage.monthly + totalCost) > limits.monthly) {
+              return callback({ status: 'error', message: `Monthly spending limit reached (${limits.monthly} ETB)` });
+            }
+          }
+          
+          // Check balance
+          if ((user.walletBalance || user.balance || 0) < totalCost) {
+            return callback({ status: 'error', message: 'Insufficient balance' });
+          }
           
           // Atomic update: only register cards still in 'preview' status
           const result = await Card.updateMany(
@@ -252,27 +299,47 @@ class GameSocket {
             });
           }
           
-          const totalCost = config.cardPrice * cardIds.length;
-          if ((user.walletBalance || user.balance || 0) < totalCost) {
-            console.log('🔍 Balance check:', {
-  walletBalance: user.walletBalance,
-  balance: user.balance,
-  totalCost,
-  sufficient: (user.walletBalance || user.balance || 0) >= totalCost
-});
-            // Rollback
-            await Card.updateMany(
-              { _id: { $in: cardIds }, status: 'registered' },
-              { $set: { status: 'preview' } }
-            );
-            return callback({ status: 'error', message: 'Insufficient balance' });
-          }
-          
+          // Deduct balance
           if (user.walletBalance !== undefined) {
             user.walletBalance -= totalCost;
           } else {
             user.balance -= totalCost;
           }
+          
+          // Update spending usage
+          if (limits.enabled) {
+            usage.daily += totalCost;
+            usage.weekly += totalCost;
+            usage.monthly += totalCost;
+            user.spendingUsage = usage;
+            
+            // 🔥 NOTIFY if near limit (80%)
+            if (limits.daily > 0 && usage.daily >= limits.daily * 0.8) {
+              await Notification.create({
+                user: socket.userId,
+                type: 'limit_warning',
+                title: '⚠️ Daily Limit Warning',
+                message: `You've used ${usage.daily}/${limits.daily} ETB today`,
+              });
+            }
+            if (limits.weekly > 0 && usage.weekly >= limits.weekly * 0.8) {
+              await Notification.create({
+                user: socket.userId,
+                type: 'limit_warning',
+                title: '⚠️ Weekly Limit Warning',
+                message: `You've used ${usage.weekly}/${limits.weekly} ETB this week`,
+              });
+            }
+            if (limits.monthly > 0 && usage.monthly >= limits.monthly * 0.8) {
+              await Notification.create({
+                user: socket.userId,
+                type: 'limit_warning',
+                title: '⚠️ Monthly Limit Warning',
+                message: `You've used ${usage.monthly}/${limits.monthly} ETB this month`,
+              });
+            }
+          }
+          
           await user.save();
           
           game.totalCards = (game.totalCards || 0) + cardIds.length;

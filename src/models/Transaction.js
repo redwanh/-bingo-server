@@ -5,7 +5,7 @@ const transactionSchema = new mongoose.Schema({
   userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', index: true },
   type: {
     type: String,
-   enum: ['card_purchase', 'prize', 'prize_win', 'commission', 'refund', 'cash', 'deposit', 'bonus', 'withdrawal', 'adjustment'],
+   enum: ['card_purchase', 'prize', 'prize_win', 'commission', 'refund', 'cash', 'deposit', 'bonus','transfer_out','transfer_in', 'withdrawal', 'adjustment'],
   },
   amount: { type: Number, required: true },         // Negative for debits, positive for credits
   gameId: { type: String, default: null },           // Game reference (e.g., "0000000017")

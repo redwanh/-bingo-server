@@ -33,6 +33,16 @@ router.get('/pool', protect, async (req, res) => {
     res.status(500).json({ success: false, message: error.message });
   }
 });
+router.get('/find/:displayId', protect, async (req, res) => {
+  try {
+    const Card = require('../models/Card');
+    const card = await Card.findOne({ displayId: parseInt(req.params.displayId) });
+    if (!card) return res.status(404).json({ success: false, message: 'Card not found' });
+    res.json({ success: true, card });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
 
 // 🔥 Fast status-only endpoint
 router.get('/pool/status', protect, async (req, res) => {
