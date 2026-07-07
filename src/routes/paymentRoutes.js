@@ -2,35 +2,42 @@
 const router = express.Router();
 const { protect, authorize } = require('../middleware/auth');
 const {
-  getPaymentAccounts, getAllPaymentAccounts,
-  createPaymentAccount, updatePaymentAccount, deletePaymentAccount,
-  createDeposit, createWithdrawal,
-  getDepositRequests, approveDeposit, rejectDeposit,
-  approveWithdrawal, rejectWithdrawal,
+  getPaymentAccounts,
+  getAllPaymentAccounts,
+  createPaymentAccount,
+  updatePaymentAccount,
+  deletePaymentAccount,
+  createDeposit,
+  createWithdrawal,
+  approveWithdrawal,
+  rejectWithdrawal,
   seedPaymentAccounts,
 } = require('../controllers/paymentController');
 
-// Public — get active payment accounts
+// ─── PUBLIC (authenticated users) ───
+router.use(protect);
+
+// Payment accounts (read-only for users)
 router.get('/accounts', getPaymentAccounts);
 
-// Admin — manage payment accounts
-router.get('/admin/accounts', protect, authorize('superadmin', 'admin', 'finance'), getAllPaymentAccounts);
-router.post('/admin/accounts', protect, authorize('superadmin', 'admin', 'finance'), createPaymentAccount);
-router.put('/admin/accounts/:id', protect, authorize('superadmin', 'admin', 'finance'), updatePaymentAccount);
-router.delete('/admin/accounts/:id', protect, authorize('superadmin', 'admin', 'finance'), deletePaymentAccount);
+// Deposit & Withdraw
+router.post('/deposit', createDeposit);
+router.post('/withdraw', createWithdrawal);
 
-// Player — deposit & withdraw
-router.post('/deposit', protect, createDeposit);
-router.post('/withdraw', protect, createWithdrawal);
+// ─── ADMIN ONLY ───
+router.use(authorize('admin', 'superadmin', 'finance'));
 
-// Admin — manage deposits & withdrawals
-router.get('/deposits', protect, authorize('superadmin', 'admin', 'finance'), getDepositRequests);
-router.put('/deposits/:id/approve', protect, authorize('superadmin', 'admin', 'finance'), approveDeposit);
-router.put('/deposits/:id/reject', protect, authorize('superadmin', 'admin', 'finance'), rejectDeposit);
-router.put('/withdrawals/:id/approve', protect, authorize('superadmin', 'admin', 'finance'), approveWithdrawal);
-router.put('/withdrawals/:id/reject', protect, authorize('superadmin', 'admin', 'finance'), rejectWithdrawal);
+// Manage payment accounts
+router.get('/admin/accounts', getAllPaymentAccounts);
+router.post('/admin/accounts', createPaymentAccount);
+router.put('/admin/accounts/:id', updatePaymentAccount);
+router.delete('/admin/accounts/:id', deletePaymentAccount);
 
-// Seed
-router.post('/seed', protect, authorize('superadmin'), seedPaymentAccounts);
+// 🔥 FIXED: Withdrawal management routes (match frontend)
+router.put('/withdrawals/:id/approve', approveWithdrawal);   // was /admin/withdrawals/:id/approve
+router.put('/withdrawals/:id/reject', rejectWithdrawal);     // was /admin/withdrawals/:id/reject
+
+// Seed sample data
+router.post('/seed', seedPaymentAccounts);
 
 module.exports = router;
