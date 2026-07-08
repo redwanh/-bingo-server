@@ -12,11 +12,11 @@ async function seedCards() {
     console.log(`Existing cards in DB: ${existingCount.toLocaleString()}\n`);
 
     // ══════════════════════════════════════
-    // BATCH 1: Create cards 10000-10400 with status 'available'
+    // BATCH 1: Create cards 10001-10400 with status 'available'
     // ══════════════════════════════════════
-    const availableStart = 10000;
+    const availableStart = 10001;  // Changed from 10000
     const availableEnd = 10400;
-    const availableCount = availableEnd - availableStart + 1;
+    const availableCount = availableEnd - availableStart + 1;  // 400 cards
     
     console.log(`📦 Creating ${availableCount} cards (${availableStart}-${availableEnd}) with status: available`);
     console.time('Available Cards');
@@ -37,11 +37,11 @@ async function seedCards() {
     console.log(`✅ ${availableCount} available cards created!\n`);
 
     // ══════════════════════════════════════
-    // BATCH 2: Create cards 20000-29999 with status 'preview'
+    // BATCH 2: Create cards 20000-21000 with status 'preview'
     // ══════════════════════════════════════
     const previewStart = 20000;
-    const previewEnd = 29999;
-    const previewCount = previewEnd - previewStart + 1;
+    const previewEnd = 21000;  // Changed from 29999
+    const previewCount = previewEnd - previewStart + 1;  // 1001 cards
     
     console.log(`📦 Creating ${previewCount.toLocaleString()} cards (${previewStart}-${previewEnd}) with status: preview`);
     console.time('Preview Cards');
@@ -93,6 +93,7 @@ async function seedCards() {
     const sampleAvail = await Card.findOne({ displayId: 10001 });
     if (sampleAvail) {
       console.log(`\n📋 Sample Available Card #10001:`);
+      console.log(`   _id: ${sampleAvail._id}`);
       console.log(`   displayId: ${sampleAvail.displayId}`);
       console.log(`   status: ${sampleAvail.status}`);
       console.log(`   userId: ${sampleAvail.userId || 'null'}`);
@@ -102,6 +103,7 @@ async function seedCards() {
     const samplePrev = await Card.findOne({ displayId: 20001 });
     if (samplePrev) {
       console.log(`\n📋 Sample Preview Card #20001:`);
+      console.log(`   _id: ${samplePrev._id}`);
       console.log(`   displayId: ${samplePrev.displayId}`);
       console.log(`   status: ${samplePrev.status}`);
       console.log(`   userId: ${samplePrev.userId || 'null'}`);
