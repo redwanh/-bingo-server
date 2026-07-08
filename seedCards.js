@@ -1,86 +1,73 @@
-require('dotenv').config();
+require('dotenv').config({ path: require('path').join(__dirname, '.env') });
 const mongoose = require('mongoose');
 
-// Use the same connection as the original seeder
-const MONGO_URI = process.env.MONGODB_URI || process.env.MONGO_URI || 'mongodb://localhost:27017/bingo-platform';
+// Try all possible env variable names
+const uri = process.env.MONGODB_URI || process.env.MONGO_URI || process.env.DB_URI || process.env.DATABASE_URL;
 
-// Don't import the Card model from the seed — import it from your actual models
-const Card = require('./src/models/Card');
-
-function genCol(min, max) {
-  const s = new Set();
-  while (s.size < 5) s.add(Math.floor(Math.random() * (max - min + 1)) + min);
-  return Array.from(s).map(n => ({ number: n, isMarked: false }));
+if (!uri) {
+  console.error('❌ No MongoDB URI found. Check your .env file.');
+  console.log('Available env vars containing MONGO:');
+  Object.keys(process.env).filter(k => k.includes('MONGO') || k.includes('DB') || k.includes('DATABASE')).forEach(k => {
+    console.log(`  ${k}=${process.env[k]}`);
+  });
+  process.exit(1);
 }
+
+const FB_Card = require('./src/models/FB_Card');
+
+const ranges = { B: [1,15], I: [16,30], N: [31,45], G: [46,60], O: [61,75] };
 
 function generateGrid() {
-  const c = {
-    B: genCol(1, 15),
-    I: genCol(16, 30),
-    N: genCol(31, 45),
-    G: genCol(46, 60),
-    O: genCol(61, 75)
-  };
-  c.N[2] = { number: 0, isMarked: true };
-  return c;
+  const grid = {};
+  for (const [col, [min, max]] of Object.entries(ranges)) {
+    const set = new Set();
+    while (set.size < 5) {
+      set.add(Math.floor(Math.random() * (max - min + 1)) + min);
+    }
+    grid[col] = Array.from(set).map(n => ({ number: n, isMarked: false }));
+  }
+  grid.N[2] = { number: 0, isMarked: true };
+  return grid;
 }
 
-async function seed() {
+async function seedFbCards() {
   try {
-    console.log('🔌 Connecting to MongoDB...');
-    console.log('URI:', MONGO_URI.replace(/\/\/.*@/, '//*****@')); // Hide credentials
-    await mongoose.connect(MONGO_URI);
-    console.log('✅ Connected to MongoDB\n');
+    await mongoose.connect(uri);
+    console.log('✅ MongoDB connected\n');
 
-    // Delete all cards
-    const deleted = await Card.deleteMany({});
-    console.log(`🗑️ Deleted ${deleted.deletedCount} old cards\n`);
+    await FB_Card.deleteMany({});
+    console.log('🗑️  Old FB cards deleted\n');
 
-    // Generate 400 new cards ONE BY ONE
-    console.log('🃏 Generating 400 bingo cards...');
-    let created = 0;
+    const startId = 10001;
+    const endId = 10400;
+
+    console.log(`📦 Creating 400 FB cards (${startId}-${endId})...`);
+    console.time('FB Cards');
+
+    const cards = [];
     for (let i = 0; i < 400; i++) {
-      const grid = generateGrid();
-      try {
-        await Card.create({
-          gameId: null,
-          userId: null,
-          displayId: 10001 + i,
-          cardNumber: i + 1,
-          grid,
-          price: 10,
-          status: 'available',
-          isBlocked: false,
-          bingoCalled: false,
-        });
-        created++;
-        if ((i + 1) % 100 === 0) console.log(`   ${i + 1}/400 done`);
-      } catch (e) {
-        console.error(`   ❌ Card ${i + 1} failed:`, e.message);
-      }
+      cards.push({
+        displayId: startId + i,
+        status: 'available',
+        grid: generateGrid(),
+      });
     }
 
-    console.log(`\n✅ Created ${created} cards (displayId: 10001-${10000 + created})`);
+    const result = await FB_Card.insertMany(cards, { ordered: false });
+    console.timeEnd('FB Cards');
+    console.log(`✅ ${result.length} FB cards created!\n`);
 
-    const total = await Card.countDocuments({ status: 'available' });
-    console.log(`📊 Total available cards: ${total}`);
-
-    // Show sample
-    const sample = await Card.findOne({ displayId: 10001 });
-    if (sample) {
-      console.log('\nSample Card #10001:');
-      console.log(`  displayId: ${sample.displayId}`);
-      console.log(`  status: ${sample.status}`);
-      console.log('  B:', sample.grid.B.map(c => c.number).join(', '));
-    }
+    const count = await FB_Card.countDocuments();
+    const sample = await FB_Card.findOne({ displayId: 10001 });
+    console.log(`   Total: ${count}`);
+    console.log(`   Sample #10001: ${sample ? `✅ (status: ${sample.status})` : '❌ MISSING'}`);
 
     await mongoose.connection.close();
-    console.log('\n👋 Done!');
     process.exit(0);
-  } catch (e) {
-    console.error('❌ Error:', e.message);
+  } catch (error) {
+    console.error('❌ Error:', error.message);
     process.exit(1);
   }
 }
 
-seed();
+seedFbCards();

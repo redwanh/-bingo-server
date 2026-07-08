@@ -12,6 +12,10 @@ const MainBingoEngine = require('./src/services/mainBingoEngine');
 const GameEngine = require('./src/engine');
 const GameSocket = require('./src/socket/gameSocket');
 
+// 🔥 NEW IMPORTS
+const FB_FastBingoEngine = require('./src/engine/FB_FastBingoEngine');
+const FB_FastBingoSocket = require('./src/socket/FB_fastBingoSocket');
+
 // ══════════════════════════════════════
 // CONFIGURATION
 // ══════════════════════════════════════
@@ -87,6 +91,9 @@ app.use('/api/scheduled-games', require('./src/routes/scheduledGameRoutes'));
 app.use('/api/user-game-history', require('./src/routes/UserGameHistory'));
 app.use('/api/main-bingo-history', require('./src/routes/MainBingoHistory'));
 
+// 🔥 NEW: Fast Bingo routes (separate from old /api/game)
+app.use('/api/fb', require('./src/routes/FB_fastBingoRoutes'));
+
 // ══════════════════════════════════════
 // STATIC FILES (PRODUCTION)
 // ══════════════════════════════════════
@@ -134,39 +141,54 @@ async function startServer() {
         // Create indexes
         await require('./src/models/indexes')();
 
-        // Initialize game engines
+        // ══════════════════════════════════════
+        // OLD ENGINES (Keep running)
+        // ══════════════════════════════════════
         const mainBingoEngine = new MainBingoEngine(io);
-console.log('🔍 MainBingoEngine created:', !!mainBingoEngine);
-console.log('🔍 drawNumbers method:', typeof mainBingoEngine.drawNumbers);
+        console.log('🔍 MainBingoEngine created:', !!mainBingoEngine);
+        console.log('🔍 drawNumbers method:', typeof mainBingoEngine.drawNumbers);
+
         const gameEngine = new GameEngine(io);
 
         app.set('gameEngine', gameEngine);
         app.set('io', io);
         app.set('mainBingoEngine', mainBingoEngine);
 
-        // Initialize socket handlers (pass BOTH engines)
+        // Initialize OLD socket handlers
         const gameSocket = new GameSocket(io, gameEngine, mainBingoEngine);
         gameSocket.initialize();
+        console.log('✅ Old GameSocket initialized');
+
+        // ══════════════════════════════════════
+        // 🔥 NEW: Fast Bingo Engine + Socket
+        // ══════════════════════════════════════
+        const fbEngine = new FB_FastBingoEngine(io);
+        app.set('fbEngine', fbEngine);
+        console.log('✅ FB_FastBingoEngine created');
+
+        const fbSocket = new FB_FastBingoSocket(io, fbEngine);
+        fbSocket.initialize();
+        console.log('✅ FB_FastBingoSocket initialized');
 
         // Create first fast bingo game if none exists
+                // 🔥 Create first FB game if none exists
         try {
-            const Game = require('./src/models/Game');
-            const activeGames = await Game.countDocuments({ roomId: 'fast_bingo', status: { $ne: 'completed' } });
+            const FB_Game = require('./src/models/FB_Game');
+            const activeGames = await FB_Game.countDocuments({ status: { $ne: 'completed' } });
             if (activeGames === 0) {
-                const lastNum = await Game.getLatestGameNumber('fast_bingo');
-                await Game.create({
+                const lastNum = await FB_Game.getLatestGameNumber('fb_fast_bingo');
+                await FB_Game.create({
                     gameId: String(lastNum + 1).padStart(10, '0'),
                     gameNumber: lastNum + 1,
-                    roomId: 'fast_bingo',
+                    roomId: 'fb_fast_bingo',
                     status: 'scheduled',
-                    allNumbers: [],
-                    minCardsToStart: 1,
+                    allNumbers: fbEngine.shuffleNumbers(),
                     timerDuration: 30
                 });
-                console.log(`🆕 Created first game #${lastNum + 1}`);
+                console.log(`🆕 FB: Created first game #${lastNum + 1}`);
             }
         } catch (err) {
-            console.error('❌ Error creating first game:', err.message);
+            console.error('❌ FB: Error creating first game:', err.message);
         }
 
         server.listen(PORT, () => {
