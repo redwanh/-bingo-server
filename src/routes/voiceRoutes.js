@@ -7,7 +7,7 @@ const fs = require('fs');
 const path = require('path');
 
 // GET - Fetch all voices
-router.get('/', protect, async (req, res) => {
+router.get('/', async (req, res) => {
   const voices = await Voice.find().sort({ number: 1 });
   res.json({ success: true, voices });
 });
@@ -24,7 +24,7 @@ router.get('/debug', async (req, res) => {
 });
 
 // PUT - Save/update a voice
-router.put('/:number', protect, authorize('admin','superadmin'), async (req, res) => {
+router.put('/:number', authorize('admin','superadmin'), async (req, res) => {
   try {
     const number = parseInt(req.params.number);
     const updateData = {};
@@ -40,7 +40,7 @@ router.put('/:number', protect, authorize('admin','superadmin'), async (req, res
 });
 
 // POST /init - Create 75 empty slots
-router.post('/init', protect, authorize('superadmin'), async (req, res) => {
+router.post('/init', authorize('superadmin'), async (req, res) => {
   for (let i = 1; i <= 75; i++) {
     const letter = i <= 15 ? 'B' : i <= 30 ? 'I' : i <= 45 ? 'N' : i <= 60 ? 'G' : 'O';
     await Voice.updateOne(
@@ -53,7 +53,7 @@ router.post('/init', protect, authorize('superadmin'), async (req, res) => {
 });
 
 // POST /generate-all — Generate all 75 voices in Amharic
-router.post('/generate-all', protect, authorize('admin', 'superadmin'), async (req, res) => {
+router.post('/generate-all', authorize('admin', 'superadmin'), async (req, res) => {
   res.json({ success: true, message: 'Generating 75 Amharic voices... ~2 minutes' });
   
   for (let i = 1; i <= 75; i++) {
