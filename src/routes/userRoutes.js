@@ -1,22 +1,37 @@
 ﻿const express = require('express');
 const router = express.Router();
-const { 
-  updateProfile, changePassword, linkTelegram, 
-  findUserByPhone, transferBalance, getLimits, updateLimits,
-  addFavoriteCartela, getFavoriteCartelas, removeFavoriteCartela  // ← ADD THESE
-} = require('../controllers/userController');
 const { protect } = require('../middleware/auth');
+const {
+  updateProfile,
+  findUserByPhone,
+  transferBalance,
+  changePassword,
+  addFavoriteCartela,
+  getFavoriteCartelas,
+  removeFavoriteCartela,
+  getLimits,
+  updateLimits,
+  linkTelegram,
+} = require('../controllers/userController');
 
-router.use(protect);
-router.put('/profile', updateProfile);
-router.put('/change-password', changePassword);
-router.put('/link-telegram', linkTelegram);
-router.post('/find-by-phone', protect, findUserByPhone);
+// Profile
+router.put('/profile', protect, updateProfile);
+router.put('/change-password', protect, changePassword);
+
+// Transfer
 router.post('/transfer', protect, transferBalance);
-router.put('/limits', protect, updateLimits);
+router.post('/find-user', protect, findUserByPhone);
+
+// Favorites
+router.post('/favorites', protect, addFavoriteCartela);
+router.get('/favorites', protect, getFavoriteCartelas);
+router.delete('/favorites/:displayId', protect, removeFavoriteCartela);
+
+// Limits
 router.get('/limits', protect, getLimits);
-router.post('/favorite-cartela', protect, addFavoriteCartela);
-router.get('/favorite-cartelas', protect, getFavoriteCartelas);
-router.delete('/favorite-cartela/:displayId', protect, removeFavoriteCartela);
+router.put('/limits', protect, updateLimits);
+
+// Telegram
+router.put('/link-telegram', protect, linkTelegram);
 
 module.exports = router;

@@ -18,12 +18,34 @@ router.get('/config/:roomId', protect, async (req, res) => {
 });
 
 // Update room config (admin only)
+// Update room config (admin only)
 router.put('/config/:roomId', protect, authorize('admin', 'superadmin'), async (req, res) => {
     const config = await GameConfig.findOneAndUpdate(
         { roomId: req.params.roomId }, 
         req.body, 
         { new: true, upsert: true }
     );
+    
+    // 🔥 Broadcast config changes to all players in the room
+    const io = req.app.get('io');
+    if (io) {
+        io.to(req.params.roomId).emit('configUpdated', {
+            roomId: req.params.roomId,
+            config: {
+                cardPrice: config.cardPrice,
+                maxCardsPerPlayer: config.maxCardsPerPlayer,
+                minPlayersToStart: config.minPlayersToStart,
+                waitTimeSeconds: config.waitTimeSeconds,
+                drawIntervalSeconds: config.drawIntervalSeconds,
+                commissionPercentage: config.commissionPercentage,
+                gracePeriodSeconds: config.gracePeriodSeconds,
+                isActive: config.isActive,
+                autoBingoEnabled: config.autoBingoEnabled,
+            }
+        });
+        console.log('🟢 Config broadcasted to room:', req.params.roomId);
+    }
+    
     res.json({ success: true, config });
 });
 
@@ -343,6 +365,52 @@ router.get('/admin/active', protect, authorize('admin', 'superadmin'), async (re
     } catch (e) {
         res.status(500).json({ error: e.message });
     }
+});
+router.post('/admin/force-schedule/:roomId', protect, authorize('admin', 'superadmin'), async (req, res) => {
+  try {
+    const engine = req.app.get('gameEngine');
+    await engine.scheduleNewGame(req.params.roomId);
+    
+    res.json({ success: true, message: 'New game scheduled for room: ' + req.params.roomId });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+router.put('/config/fast_bingo', protect, authorize('admin', 'superadmin'), async (req, res) => {
+  try {
+    const config = await GameConfig.findOneAndUpdate(
+      { roomId: 'fast_bingo' },
+      { $set: req.body },
+      { new: true, upsert: true }
+    );
+
+    // 🔥 BROADCAST TO ALL PLAYERS
+    const io = req.app.get('io');
+    if (io) {
+      io.to('fast_bingo').emit('configUpdated', {
+        roomId: 'fast_bingo',
+        config: {
+          cardPrice: config.cardPrice,
+          maxCardsPerPlayer: config.maxCardsPerPlayer,
+          minPlayersToStart: config.minPlayersToStart,
+          waitTimeSeconds: config.waitTimeSeconds,
+          drawIntervalSeconds: config.drawIntervalSeconds,
+          commissionPercentage: config.commissionPercentage,
+          gracePeriodSeconds: config.gracePeriodSeconds,
+          isActive: config.isActive,
+          autoBingoEnabled: config.autoBingoEnabled,
+        }
+      });
+      console.log('🟢 Config broadcasted to fast_bingo room');
+    } else {
+      console.log('🔴 io is NOT set on app');
+    }
+
+    res.json(config);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
 });
 
 module.exports = router;

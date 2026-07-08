@@ -167,11 +167,23 @@ async registerCard(roomId, userId, cardId, socketCallback) {
             status: "completed",
         });
 
-        // Step 9: Start countdown
-        if (updatedGame.players.length === 1) {
-            this.engine.gameFlow.startCountdown(roomId, updatedGame, config);
-        }
-
+// Step 9: Start countdown — ONLY if not already running
+if (game.players.length === 0 && !game.timerStartedAt) {
+    console.log('🕐 First player! Starting countdown');
+    
+    // 🔥 BROADCAST to all players
+    this.engine.io.to(roomId).emit('countdownStarted', {
+        timerStartedAt: new Date().toISOString(),
+        timerDuration: config.waitTimeSeconds,
+        gameId: updatedGame.gameId || updatedGame._id,
+        gameNumber: updatedGame.gameNumber,
+    });
+    console.log('📡 [CardService] countdownStarted emitted to room:', roomId);
+    
+    this.engine.gameFlow.startCountdown(roomId, updatedGame, config);
+} else {
+    console.log('⏱️ Timer already running or not first player, skipping');
+}
         // Send callback
         console.log("🟢 [REGISTER] Sending callback...");
         if (typeof socketCallback === "function") {

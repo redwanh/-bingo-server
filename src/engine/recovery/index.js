@@ -97,7 +97,7 @@ class RecoveryService {
       current.currentNumber = { number: num, letter };
       current.drawnNumbers.push({ number: num, letter });
       await current.save();
-      this.engine.io.to(game.roomId).emit('numberDrawn', { number: num, letter, drawCount: idx + 1 });
+     
       idx++;
     }, config.drawIntervalSeconds * 1000, 'number_draw');
   }
