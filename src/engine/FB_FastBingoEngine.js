@@ -9,6 +9,7 @@ const User = require('../models/User');
 const Transaction = require('../models/Transaction');
 const GameConfig = require('../models/GameConfig');
 
+
 // 🔥 Helper: Mark drawn numbers on a card grid
 function markGridWithDrawn(grid, drawnNumbers) {
   if (!grid || !drawnNumbers?.length) return grid;
@@ -24,6 +25,8 @@ function markGridWithDrawn(grid, drawnNumbers) {
   });
   return marked;
 }
+
+
 
 // 🔥 Business-friendly error messages
 const ERRORS = {
@@ -515,6 +518,7 @@ if (!updatedGame) {
   // GRACE PERIOD END
   // =====================
   async endGracePeriod(roomId, gameId) {
+     try {
     const game = await Game.findById(gameId);
     if (!game || game.status === 'completed') return;
 
@@ -562,9 +566,14 @@ if (!updatedGame) {
       await this.endGameNoWinner(roomId, game);
     }
 
-    await this.resetAllCards(roomId);
-    this.clearTimers(roomId);
-    this.scheduleNewGame(roomId);
+     await this.resetAllCards(roomId);
+      this.clearTimers(roomId);
+      this.scheduleNewGame(roomId);
+    } catch (err) {
+      console.error('❌ endGracePeriod error:', err.message);
+      // Still try to schedule new game even if cleanup fails
+      try { this.scheduleNewGame(roomId); } catch {}
+    }
   }
 
   // =====================
@@ -586,13 +595,16 @@ if (!updatedGame) {
     this.scheduleNewGame(roomId);
   }
 
+  _getDisplayRange(roomId) {
+  if (roomId.includes('_20')) return { min: 20001, max: 20400 };
+  if (roomId.includes('_30')) return { min: 30001, max: 30400 };
+  return { min: 10001, max: 10400 };
+}
   // =====================
   // RESET & NEW GAME
   // =====================
 async resetAllCards(roomId) {
-    const roomConfig = Object.values(FB_ROOMS).find(r => r.roomId === roomId);
-    const range = roomConfig?.displayRange || { min: 10001, max: 10400 };
-    
+    const range = this._getDisplayRange(roomId);
     await Card.updateMany(
       { displayId: { $gte: range.min, $lte: range.max } },
       { $set: { status: 'available', userId: null, gameId: null, isBlocked: false, bingoCalled: false, winType: null } }
