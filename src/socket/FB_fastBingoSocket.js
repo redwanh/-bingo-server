@@ -70,6 +70,9 @@ class FB_FastBingoSocket {
 
     // ─── BUY CARD ────────────────────────────
     socket.on('fb_buyCard', async (data, callback) => {
+  console.log('🔵🔵🔵 FB SOCKET RECEIVED fb_buyCard:', data);
+  console.log('🔵 socket.userId:', socket.userId);
+  console.log('🔵 this.roomId:', this.roomId);
       try {
         const { cardId } = data;
         console.log(`🛒 FB: ${socket.username} buying card ${cardId}`);
