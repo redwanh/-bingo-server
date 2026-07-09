@@ -121,25 +121,28 @@ class FB_FastBingoEngine {
     return GameConfig.findOne({ roomId }).lean();
   }
 
-  async updateConfig(roomId, updates) {
-    const config = await GameConfig.findOneAndUpdate(
-      { roomId },
-      updates,
-      { new: true, upsert: true }
-    );
-    this.io.to(roomId).emit('configUpdated', {
-      cardPrice: config.cardPrice,
-      maxCardsPerPlayer: config.maxCardsPerPlayer,
-      waitTimeSeconds: config.waitTimeSeconds,
-      drawIntervalSeconds: config.drawIntervalSeconds,
-      commissionPercentage: config.commissionPercentage,
-      gracePeriodSeconds: config.gracePeriodSeconds,
-      isActive: config.isActive,
-      autoBingoEnabled: config.autoBingoEnabled
-    });
-    return config;
-  }
-
+async updateConfig(roomId, updates) {
+  // 🔥 Remove _id from updates if present
+  const { _id, ...cleanUpdates } = updates;
+  
+  const config = await GameConfig.findOneAndUpdate(
+    { roomId },
+    cleanUpdates,
+    { new: true, upsert: true }
+  );
+  
+  this.io.to(roomId).emit('configUpdated', {
+    cardPrice: config.cardPrice,
+    maxCardsPerPlayer: config.maxCardsPerPlayer,
+    waitTimeSeconds: config.waitTimeSeconds,
+    drawIntervalSeconds: config.drawIntervalSeconds,
+    commissionPercentage: config.commissionPercentage,
+    gracePeriodSeconds: config.gracePeriodSeconds,
+    isActive: config.isActive,
+    autoBingoEnabled: config.autoBingoEnabled
+  });
+  return config;
+}
   // =====================
   // WIN DETECTION
   // =====================

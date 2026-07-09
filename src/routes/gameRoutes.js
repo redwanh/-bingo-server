@@ -18,15 +18,16 @@ router.get('/config/:roomId', protect, async (req, res) => {
 });
 
 // Update room config (admin only)
-// Update room config (admin only)
 router.put('/config/:roomId', protect, authorize('admin', 'superadmin'), async (req, res) => {
+    // 🔥 Strip immutable fields
+    const { _id, __v, createdAt, updatedAt, ...cleanBody } = req.body;
+    
     const config = await GameConfig.findOneAndUpdate(
         { roomId: req.params.roomId }, 
-        req.body, 
+        cleanBody, 
         { new: true, upsert: true }
     );
     
-    // 🔥 Broadcast config changes to all players in the room
     const io = req.app.get('io');
     if (io) {
         io.to(req.params.roomId).emit('configUpdated', {
@@ -43,7 +44,6 @@ router.put('/config/:roomId', protect, authorize('admin', 'superadmin'), async (
                 autoBingoEnabled: config.autoBingoEnabled,
             }
         });
-        console.log('🟢 Config broadcasted to room:', req.params.roomId);
     }
     
     res.json({ success: true, config });
@@ -53,7 +53,6 @@ router.put('/config/:roomId', protect, authorize('admin', 'superadmin'), async (
 // GAME STATE
 // ============================================
 
-// Get game state
 router.get('/state/:roomId', protect, async (req, res) => {
     try {
         const engine = req.app.get('gameEngine');
@@ -65,10 +64,9 @@ router.get('/state/:roomId', protect, async (req, res) => {
 });
 
 // ============================================
-// CARD PREVIEW (FIXED - ADD THIS)
+// CARD PREVIEW
 // ============================================
 
-// Preview a card (generate without buying)
 router.post('/preview/:roomId', protect, async (req, res) => {
     try {
         const engine = req.app.get('gameEngine');
@@ -79,33 +77,21 @@ router.post('/preview/:roomId', protect, async (req, res) => {
     }
 });
 
-// Get preview cards for a room
 router.get('/:roomId/preview-cards', protect, async (req, res) => {
     try {
         const game = await Game.getActiveGame(req.params.roomId);
         if (!game) return res.json({ cards: [], message: 'No active game' });
-
-        const previewCards = await Card.find({
-            gameId: game._id,
-            userId: req.user.id,
-            status: 'preview'
-        });
-
+        const previewCards = await Card.find({ gameId: game._id, userId: req.user.id, status: 'preview' });
         res.json({ cards: previewCards, gameId: game._id });
     } catch (e) {
         res.status(500).json({ error: e.message });
     }
 });
 
-// Cancel a preview card
 router.delete('/preview/:cardId', protect, async (req, res) => {
     try {
         const engine = req.app.get('gameEngine');
-        const result = await engine.cancelPreviewCard(
-            req.params.roomId || 'fast_bingo', 
-            req.user.id, 
-            req.params.cardId
-        );
+        const result = await engine.cancelPreviewCard(req.params.roomId || 'fast_bingo', req.user.id, req.params.cardId);
         res.json(result);
     } catch (e) {
         res.status(400).json({ success: false, error: e.message });
@@ -113,17 +99,13 @@ router.delete('/preview/:cardId', protect, async (req, res) => {
 });
 
 // ============================================
-// CARD REGISTRATION (FIXED - ADD THIS)
+// CARD REGISTRATION
 // ============================================
 
-// Register a previewed card (actually buy it)
 router.post('/register/:roomId', protect, async (req, res) => {
     try {
         const { cardId } = req.body;
-        if (!cardId) {
-            return res.status(400).json({ success: false, error: 'cardId is required' });
-        }
-        
+        if (!cardId) return res.status(400).json({ success: false, error: 'cardId is required' });
         const engine = req.app.get('gameEngine');
         const result = await engine.registerCard(req.params.roomId, req.user.id, cardId);
         res.json(result);
@@ -133,10 +115,9 @@ router.post('/register/:roomId', protect, async (req, res) => {
 });
 
 // ============================================
-// BUY CARD (Direct purchase - existing)
+// BUY CARD
 // ============================================
 
-// Buy card directly (without preview)
 router.post('/buy/:roomId', protect, async (req, res) => {
     try {
         const engine = req.app.get('gameEngine');
@@ -151,7 +132,6 @@ router.post('/buy/:roomId', protect, async (req, res) => {
 // BINGO CALL
 // ============================================
 
-// Call BINGO
 router.post('/bingo/:roomId', protect, async (req, res) => {
     try {
         const engine = req.app.get('gameEngine');
@@ -166,22 +146,13 @@ router.post('/bingo/:roomId', protect, async (req, res) => {
 // MARK NUMBER
 // ============================================
 
-// Mark a number on a card
 router.post('/mark', protect, async (req, res) => {
     try {
         const { cardId, number, letter } = req.body;
         const card = await Card.findOne({ _id: cardId, userId: req.user.id });
-        
-        if (!card || card.isBlocked) {
-            return res.status(400).json({ error: 'Invalid card' });
-        }
-        
+        if (!card || card.isBlocked) return res.status(400).json({ error: 'Invalid card' });
         const cell = card.grid[letter]?.find(c => c.number === number);
-        if (cell) {
-            cell.isMarked = !cell.isMarked;
-            await card.save();
-        }
-        
+        if (cell) { cell.isMarked = !cell.isMarked; await card.save(); }
         res.json({ success: true, grid: card.grid });
     } catch (e) {
         res.status(400).json({ error: e.message });
@@ -192,17 +163,11 @@ router.post('/mark', protect, async (req, res) => {
 // GAME HISTORY
 // ============================================
 
-// Get game history
 router.get('/history/:roomId', protect, async (req, res) => {
     try {
-        const games = await Game.find({ 
-            roomId: req.params.roomId, 
-            status: 'completed' 
-        })
-        .sort({ endTime: -1 })
-        .limit(20)
-        .select('gameId gameNumber prizePool winners playerCount totalCards endTime');
-        
+        const games = await Game.find({ roomId: req.params.roomId, status: 'completed' })
+            .sort({ endTime: -1 }).limit(20)
+            .select('gameId gameNumber prizePool winners playerCount totalCards endTime');
         res.json(games);
     } catch (e) {
         res.status(500).json({ error: e.message });
@@ -210,28 +175,19 @@ router.get('/history/:roomId', protect, async (req, res) => {
 });
 
 // ============================================
-// TRANSACTIONS
+// USER GAME HISTORY WITH CARDS
 // ============================================
 
-// Get user's game history with winning cards and grouped by game
 router.get('/history/user/all', protect, async (req, res) => {
     try {
-        const games = await Game.find({ 
-            'players.userId': req.user.id,
-            status: 'completed' 
-        })
-        .sort({ endTime: -1 })
-        .limit(50)
-        .select('gameId gameNumber roomId prizePool winners playerCount totalCards endTime startTime drawnNumbers');
+        const games = await Game.find({ 'players.userId': req.user.id, status: 'completed' })
+            .sort({ endTime: -1 }).limit(50)
+            .select('gameId gameNumber roomId prizePool winners playerCount totalCards endTime startTime drawnNumbers');
         
-        // Get all user's cards for these games
         const gameIds = games.map(g => g._id);
-        const userCards = await Card.find({
-            gameId: { $in: gameIds },
-            userId: req.user.id
-        }).select('gameId cardNumber bingoCalled winType price grid');
+        const userCards = await Card.find({ gameId: { $in: gameIds }, userId: req.user.id })
+            .select('gameId cardNumber bingoCalled winType price grid');
         
-        // Group cards by game
         const cardsByGame = {};
         userCards.forEach(card => {
             const gid = card.gameId.toString();
@@ -239,38 +195,21 @@ router.get('/history/user/all', protect, async (req, res) => {
             cardsByGame[gid].push(card);
         });
         
-        // Enrich games with user data
         const enriched = games.map(game => {
             const gid = game._id.toString();
             const myCards = cardsByGame[gid] || [];
             const winningCards = myCards.filter(c => c.bingoCalled);
             const isWinner = winningCards.length > 0;
-            
             return {
-                gameId: game.gameId,
-                gameNumber: game.gameNumber,
-                roomId: game.roomId,
-                startTime: game.startTime,
-                endTime: game.endTime,
-                totalCards: game.totalCards,
-                playerCount: game.playerCount,
-                numbersCalled: game.drawnNumbers?.length || 0,
-                totalNumbers: 75,
-                myCardsCount: myCards.length,
-                isWinner,
+                gameId: game.gameId, gameNumber: game.gameNumber, roomId: game.roomId,
+                startTime: game.startTime, endTime: game.endTime,
+                totalCards: game.totalCards, playerCount: game.playerCount,
+                numbersCalled: game.drawnNumbers?.length || 0, totalNumbers: 75,
+                myCardsCount: myCards.length, isWinner,
                 prizeWon: isWinner ? (game.winners?.find(w => w.userId?.toString() === req.user.id)?.prizeAmount || 0) : 0,
                 prizePool: game.prizePool,
-                winningCards: winningCards.map(c => ({
-                    cardNumber: c.cardNumber,
-                    winType: c.winType,
-                    grid: c.grid,
-                    price: c.price,
-                })),
-                allMyCards: myCards.map(c => ({
-                    cardNumber: c.cardNumber,
-                    bingoCalled: c.bingoCalled,
-                    price: c.price,
-                })),
+                winningCards: winningCards.map(c => ({ cardNumber: c.cardNumber, winType: c.winType, grid: c.grid, price: c.price })),
+                allMyCards: myCards.map(c => ({ cardNumber: c.cardNumber, bingoCalled: c.bingoCalled, price: c.price })),
             };
         });
         
@@ -280,12 +219,13 @@ router.get('/history/user/all', protect, async (req, res) => {
     }
 });
 
-// Get user transactions
+// ============================================
+// TRANSACTIONS
+// ============================================
+
 router.get('/transactions', protect, async (req, res) => {
     try {
-        const txns = await Transaction.find({ userId: req.user.id })
-            .sort({ createdAt: -1 })
-            .limit(50);
+        const txns = await Transaction.find({ userId: req.user.id }).sort({ createdAt: -1 }).limit(50);
         res.json(txns);
     } catch (e) {
         res.status(500).json({ error: e.message });
@@ -293,10 +233,9 @@ router.get('/transactions', protect, async (req, res) => {
 });
 
 // ============================================
-// ADMIN ENDPOINTS
+// ADMIN: FORCE END GAME
 // ============================================
 
-// Force end game (admin only)
 router.post('/admin/force-end/:roomId', protect, authorize('admin', 'superadmin'), async (req, res) => {
     try {
         const game = await Game.getActiveGame(req.params.roomId);
@@ -308,19 +247,15 @@ router.post('/admin/force-end/:roomId', protect, authorize('admin', 'superadmin'
         await game.save();
 
         const engine = req.app.get('gameEngine');
-
-        // Clear draw timer
         const timerManager = require('../utils/TimerManager');
         timerManager.clearInterval("draw_" + req.params.roomId);
         timerManager.clearTimeout("grace_" + req.params.roomId);
         timerManager.clearInterval("poll_" + req.params.roomId);
         timerManager.clearTimeout("countdown_" + req.params.roomId);
 
-        // Create new game
         const config = await GameConfig.findOne({ roomId: req.params.roomId });
         const lastNum = await Game.getLatestGameNumber(req.params.roomId);
 
-        // Shuffle numbers
         const nums = [];
         for (let i = 1; i <= 75; i++) nums.push(i);
         for (let i = nums.length - 1; i > 0; i--) {
@@ -338,79 +273,79 @@ router.post('/admin/force-end/:roomId', protect, authorize('admin', 'superadmin'
         });
 
         engine.games.set(req.params.roomId, newGame);
-        engine.io.to(req.params.roomId).emit('newGameCreated', {
-            gameId: newGame.gameId,
-            gameNumber: newGame.gameNumber,
-            message: 'New game created by admin'
-        });
+        engine.io.to(req.params.roomId).emit('newGameCreated', { gameId: newGame.gameId, gameNumber: newGame.gameNumber });
 
-        res.json({ 
-            success: true, 
-            message: 'Game force ended', 
-            newGameId: newGame.gameId 
-        });
+        res.json({ success: true, message: 'Game force ended', newGameId: newGame.gameId });
     } catch (e) {
         res.status(500).json({ error: e.message });
     }
 });
 
-// Get all active games (admin)
+// ============================================
+// ADMIN: GET ACTIVE GAMES
+// ============================================
+
 router.get('/admin/active', protect, authorize('admin', 'superadmin'), async (req, res) => {
     try {
-        const games = await Game.find({
-            status: { $in: ['scheduled', 'waiting', 'in_progress', 'bingo_called'] }
-        }).select('gameId gameNumber roomId status playerCount totalCards prizePool');
-        
+        const games = await Game.find({ status: { $in: ['scheduled', 'waiting', 'in_progress', 'bingo_called'] } })
+            .select('gameId gameNumber roomId status playerCount totalCards prizePool');
         res.json(games);
     } catch (e) {
         res.status(500).json({ error: e.message });
     }
 });
+
+// ============================================
+// ADMIN: FORCE SCHEDULE NEW GAME
+// ============================================
+
 router.post('/admin/force-schedule/:roomId', protect, authorize('admin', 'superadmin'), async (req, res) => {
-  try {
-    const engine = req.app.get('gameEngine');
-    await engine.scheduleNewGame(req.params.roomId);
-    
-    res.json({ success: true, message: 'New game scheduled for room: ' + req.params.roomId });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
+    try {
+        const engine = req.app.get('gameEngine');
+        await engine.scheduleNewGame(req.params.roomId);
+        res.json({ success: true, message: 'New game scheduled for room: ' + req.params.roomId });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
 });
 
+// ============================================
+// FAST BINGO CONFIG (DIRECT)
+// ============================================
+
 router.put('/config/fast_bingo', protect, authorize('admin', 'superadmin'), async (req, res) => {
-  try {
-    const config = await GameConfig.findOneAndUpdate(
-      { roomId: 'fast_bingo' },
-      { $set: req.body },
-      { new: true, upsert: true }
-    );
+    try {
+        // 🔥 Strip immutable fields
+        const { _id, __v, createdAt, updatedAt, ...cleanBody } = req.body;
+        
+        const config = await GameConfig.findOneAndUpdate(
+            { roomId: 'fast_bingo' },
+            { $set: cleanBody },
+            { new: true, upsert: true }
+        );
 
-    // 🔥 BROADCAST TO ALL PLAYERS
-    const io = req.app.get('io');
-    if (io) {
-      io.to('fast_bingo').emit('configUpdated', {
-        roomId: 'fast_bingo',
-        config: {
-          cardPrice: config.cardPrice,
-          maxCardsPerPlayer: config.maxCardsPerPlayer,
-          minPlayersToStart: config.minPlayersToStart,
-          waitTimeSeconds: config.waitTimeSeconds,
-          drawIntervalSeconds: config.drawIntervalSeconds,
-          commissionPercentage: config.commissionPercentage,
-          gracePeriodSeconds: config.gracePeriodSeconds,
-          isActive: config.isActive,
-          autoBingoEnabled: config.autoBingoEnabled,
+        const io = req.app.get('io');
+        if (io) {
+            io.to('fast_bingo').emit('configUpdated', {
+                roomId: 'fast_bingo',
+                config: {
+                    cardPrice: config.cardPrice,
+                    maxCardsPerPlayer: config.maxCardsPerPlayer,
+                    minPlayersToStart: config.minPlayersToStart,
+                    waitTimeSeconds: config.waitTimeSeconds,
+                    drawIntervalSeconds: config.drawIntervalSeconds,
+                    commissionPercentage: config.commissionPercentage,
+                    gracePeriodSeconds: config.gracePeriodSeconds,
+                    isActive: config.isActive,
+                    autoBingoEnabled: config.autoBingoEnabled,
+                }
+            });
         }
-      });
-      console.log('🟢 Config broadcasted to fast_bingo room');
-    } else {
-      console.log('🔴 io is NOT set on app');
-    }
 
-    res.json(config);
-  } catch (error) {
-    res.status(500).json({ message: error.message });
-  }
+        res.json(config);
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
 });
 
 module.exports = router;

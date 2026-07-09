@@ -2,7 +2,7 @@
 
 const gameConfigSchema = new mongoose.Schema({
   roomId: { type: String, unique: true, required: true },
-  roomName: { type: String, default: 'Fast Bingo' },
+  roomName: { type: String, default: 'fb_fast_bingo' },
   cardPrice: { type: Number, default: 10 },
   maxCardsPerPlayer: { type: Number, default: 5 },
   minPlayersToStart: { type: Number, default: 3 },
