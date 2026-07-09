@@ -595,7 +595,7 @@ if (!updatedGame) {
     this.scheduleNewGame(roomId);
   }
 
-  _getDisplayRange(roomId) {
+_getDisplayRange(roomId) {
   if (roomId.includes('_20')) return { min: 20001, max: 20400 };
   if (roomId.includes('_30')) return { min: 30001, max: 30400 };
   return { min: 10001, max: 10400 };
@@ -605,10 +605,12 @@ if (!updatedGame) {
   // =====================
 async resetAllCards(roomId) {
     const range = this._getDisplayRange(roomId);
-    await Card.updateMany(
+    console.log(`🔄 Resetting cards for ${roomId}, range: ${range.min}-${range.max}`);
+    const result = await Card.updateMany(
       { displayId: { $gte: range.min, $lte: range.max } },
-      { $set: { status: 'available', userId: null, gameId: null, isBlocked: false, bingoCalled: false, winType: null } }
+      { $set: { status: 'available', userId: null, gameId: null, isBlocked: false, bingoCalled: false, winType: null, reservedBy: null, reservedAt: null } }
     );
+    console.log(`🔄 Reset ${result.modifiedCount} cards for ${roomId}`);
   }
 
 async scheduleNewGame(roomId) {
