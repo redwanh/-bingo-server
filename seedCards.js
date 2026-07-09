@@ -1,7 +1,6 @@
 require('dotenv').config({ path: require('path').join(__dirname, '.env') });
 const mongoose = require('mongoose');
 
-// Try all possible env variable names
 const uri = process.env.MONGODB_URI || process.env.MONGO_URI || process.env.DB_URI || process.env.DATABASE_URL;
 
 if (!uri) {
@@ -30,39 +29,61 @@ function generateGrid() {
   return grid;
 }
 
+// 🔥 3 Room Configurations
+const ROOM_CARDS = [
+  { room: '10 Birr', startId: 10001, endId: 10400, color: '🟢' },
+  { room: '20 Birr', startId: 20001, endId: 20400, color: '🟡' },
+  { room: '30 Birr', startId: 30001, endId: 30400, color: '🔴' },
+];
+
 async function seedFbCards() {
   try {
     await mongoose.connect(uri);
     console.log('✅ MongoDB connected\n');
 
+    // Delete existing FB cards
     await FB_Card.deleteMany({});
     console.log('🗑️  Old FB cards deleted\n');
 
-    const startId = 10001;
-    const endId = 10400;
+    let totalCreated = 0;
 
-    console.log(`📦 Creating 400 FB cards (${startId}-${endId})...`);
-    console.time('FB Cards');
+    for (const room of ROOM_CARDS) {
+      const count = room.endId - room.startId + 1;
+      console.log(`${room.color} Creating ${count} cards for ${room.room} (${room.startId}-${room.endId})...`);
+      console.time(`${room.room}`);
 
-    const cards = [];
-    for (let i = 0; i < 400; i++) {
-      cards.push({
-        displayId: startId + i,
-        status: 'available',
-        grid: generateGrid(),
-      });
+      const cards = [];
+      for (let i = 0; i < count; i++) {
+        cards.push({
+          displayId: room.startId + i,
+          status: 'available',
+          grid: generateGrid(),
+        });
+      }
+
+      const result = await FB_Card.insertMany(cards, { ordered: false });
+      console.timeEnd(`${room.room}`);
+      console.log(`   ✅ ${result.length} cards created for ${room.room}\n`);
+      totalCreated += result.length;
     }
 
-    const result = await FB_Card.insertMany(cards, { ordered: false });
-    console.timeEnd('FB Cards');
-    console.log(`✅ ${result.length} FB cards created!\n`);
+    // Verify
+    const total = await FB_Card.countDocuments();
+    console.log('═══════════════════════════════');
+    console.log('📊 FB CARDS SUMMARY');
+    console.log('═══════════════════════════════');
+    console.log(`   Total cards: ${total}`);
 
-    const count = await FB_Card.countDocuments();
-    const sample = await FB_Card.findOne({ displayId: 10001 });
-    console.log(`   Total: ${count}`);
-    console.log(`   Sample #10001: ${sample ? `✅ (status: ${sample.status})` : '❌ MISSING'}`);
+    for (const room of ROOM_CARDS) {
+      const roomCount = await FB_Card.countDocuments({
+        displayId: { $gte: room.startId, $lte: room.endId }
+      });
+      const sample = await FB_Card.findOne({ displayId: room.startId });
+      console.log(`   ${room.color} ${room.room}: ${roomCount} cards | Sample #${room.startId}: ${sample ? '✅ ' + sample.status : '❌ MISSING'}`);
+    }
 
     await mongoose.connection.close();
+    console.log('\n✅ Done!');
     process.exit(0);
   } catch (error) {
     console.error('❌ Error:', error.message);

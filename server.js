@@ -166,27 +166,32 @@ async function startServer() {
         console.log('✅ FB_FastBingoSocket initialized');
 
         // 🔥 CREATE FIRST GAMES FOR ALL 3 ROOMS
-        const FB_ROOMS = ['fb_fast_bingo_10', 'fb_fast_bingo_20', 'fb_fast_bingo_30'];
-        try {
-            const FB_Game = require('./src/models/FB_Game');
-            for (const roomId of FB_ROOMS) {
-                const activeGames = await FB_Game.countDocuments({ roomId, status: { $ne: 'completed' } });
-                if (activeGames === 0) {
-                    const lastNum = await FB_Game.getLatestGameNumber(roomId);
-                    await FB_Game.create({
-                        gameId: String(lastNum + 1).padStart(10, '0'),
-                        gameNumber: lastNum + 1,
-                        roomId,
-                        status: 'scheduled',
-                        allNumbers: fbEngine.shuffleNumbers(),
-                        timerDuration: 30
-                    });
-                    console.log(`🆕 FB: Created first game for ${roomId} (#${lastNum + 1})`);
-                }
-            }
-        } catch (err) {
-            console.error('❌ FB: Error creating first games:', err.message);
+       // 🔥 CREATE FIRST GAMES FOR ALL 3 ROOMS
+const FB_ROOMS = ['fb_fast_bingo_10', 'fb_fast_bingo_20', 'fb_fast_bingo_30'];
+try {
+    const FB_Game = require('./src/models/FB_Game');
+    
+    // 🔥 First, delete old single-room games to avoid conflicts
+    await FB_Game.deleteMany({ roomId: 'fb_fast_bingo' });
+    
+    for (const roomId of FB_ROOMS) {
+        const activeGames = await FB_Game.countDocuments({ roomId, status: { $ne: 'completed' } });
+        if (activeGames === 0) {
+            const lastNum = await FB_Game.getLatestGameNumber(roomId);
+            await FB_Game.create({
+                gameId: `${roomId}_${String(lastNum + 1).padStart(10, '0')}`,
+                gameNumber: lastNum + 1,
+                roomId,
+                status: 'scheduled',
+                allNumbers: fbEngine.shuffleNumbers(),
+                timerDuration: 30
+            });
+            console.log(`🆕 FB: Created first game for ${roomId} (#${lastNum + 1})`);
         }
+    }
+} catch (err) {
+    console.error('❌ FB: Error creating first games:', err.message);
+}
 
         server.listen(PORT, () => {
             console.log(`🚀 Server running on port ${PORT} in ${NODE_ENV} mode`);

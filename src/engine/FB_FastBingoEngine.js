@@ -589,25 +589,46 @@ if (!updatedGame) {
   // =====================
   // RESET & NEW GAME
   // =====================
-  async resetAllCards(roomId) {
+async resetAllCards(roomId) {
+    const roomConfig = Object.values(FB_ROOMS).find(r => r.roomId === roomId);
+    const range = roomConfig?.displayRange || { min: 10001, max: 10400 };
+    
     await Card.updateMany(
-      { displayId: { $gte: 10001, $lte: 10400 } },
+      { displayId: { $gte: range.min, $lte: range.max } },
       { $set: { status: 'available', userId: null, gameId: null, isBlocked: false, bingoCalled: false, winType: null } }
     );
   }
 
-  async scheduleNewGame(roomId) {
+async scheduleNewGame(roomId) {
     setTimeout(async () => {
       const config = await GameConfig.findOne({ roomId });
       if (!config || !config.isActive) return;
       const lastNumber = await Game.getLatestGameNumber(roomId);
       const newGame = await Game.create({
-        gameId: String(lastNumber + 1).padStart(10, '0'),
+        gameId: `${roomId}_${String(lastNumber + 1).padStart(10, '0')}`,
         gameNumber: lastNumber + 1, roomId, status: 'scheduled',
         allNumbers: this.shuffleNumbers(), timerDuration: config.waitTimeSeconds
       });
       this.io.to(roomId).emit('newGameCreated', { gameId: newGame.gameId, gameNumber: newGame.gameNumber });
     }, 2000);
+  }
+
+  async getOrCreateGame(roomId) {
+    let game = await Game.getActiveGame(roomId);
+    if (!game) {
+      const config = await GameConfig.findOne({ roomId });
+      if (!config) return null;
+      const lastNumber = await Game.getLatestGameNumber(roomId);
+      game = await Game.create({
+        gameId: `${roomId}_${String(lastNumber + 1).padStart(10, '0')}`,
+        gameNumber: lastNumber + 1,
+        roomId,
+        status: 'scheduled',
+        allNumbers: this.shuffleNumbers(),
+        timerDuration: config.waitTimeSeconds
+      });
+    }
+    return game;
   }
 
   // =====================
