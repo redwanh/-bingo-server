@@ -40,7 +40,6 @@ const allowedOrigins = [
 // ══════════════════════════════════════
 const app = express();
 
-// Security (disable strict CORS for API)
 app.use(helmet({
     contentSecurityPolicy: false,
     crossOriginEmbedderPolicy: false,
@@ -48,7 +47,6 @@ app.use(helmet({
     crossOriginOpenerPolicy: false,
 }));
 
-// CORS - Allow all origins for now (fix later)
 app.use((req, res, next) => {
     res.header('Access-Control-Allow-Origin', req.headers.origin || '*');
     res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS');
@@ -91,13 +89,15 @@ app.use('/api/scheduled-games', require('./src/routes/scheduledGameRoutes'));
 app.use('/api/user-game-history', require('./src/routes/UserGameHistory'));
 app.use('/api/main-bingo-history', require('./src/routes/MainBingoHistory'));
 
-// 🔥 NEW: Fast Bingo routes (separate from old /api/game)
+// 🔥 NEW: Fast Bingo routes
 app.use('/api/fb', require('./src/routes/FB_fastBingoRoutes'));
 
 // ══════════════════════════════════════
 // STATIC FILES (PRODUCTION)
+// 🔥 FIX: Look for player-app build AND client build
 // ══════════════════════════════════════
 const buildPaths = [
+    path.join(__dirname, '..', 'player-app', 'build'),
     path.join(__dirname, '..', 'client', 'build'),
     path.join(__dirname, 'client', 'build'),
     path.join(__dirname, 'build'),
@@ -106,13 +106,21 @@ const buildPaths = [
 const clientBuildPath = buildPaths.find(p => fs.existsSync(p));
 
 if (clientBuildPath) {
+    console.log('📁 Serving static files from:', clientBuildPath);
     app.use(express.static(clientBuildPath));
+    // 🔥 CATCH-ALL: Serve index.html for all non-API routes (SPA routing)
     app.get('*', (req, res, next) => {
         if (req.path.startsWith('/api')) return next();
+        if (req.path.startsWith('/health')) return next();
+        if (req.path.startsWith('/uploads')) return next();
+        if (req.path.startsWith('/voices')) return next();
         res.sendFile(path.join(clientBuildPath, 'index.html'));
     });
 } else if (NODE_ENV === 'development') {
     console.log('⚠️ React build not found - API only mode');
+} else {
+    console.log('⚠️ No static build found. Checking paths:');
+    buildPaths.forEach(p => console.log('  ', p, fs.existsSync(p) ? '✅' : '❌'));
 }
 
 app.use(errorHandler);
@@ -124,9 +132,9 @@ const server = http.createServer(app);
 
 const io = socketIo(server, {
     cors: { origin: '*', methods: ['GET', 'POST'], credentials: true },
-    pingTimeout: 120000,    // 2 minutes
-    pingInterval: 30000,    // 30 seconds
-    connectTimeout: 30000,  // 30 seconds
+    pingTimeout: 120000,
+    pingInterval: 30000,
+    connectTimeout: 30000,
     maxHttpBufferSize: 1e6,
     transports: ['websocket', 'polling'],
 });
@@ -136,14 +144,13 @@ const io = socketIo(server, {
 // ══════════════════════════════════════
 async function startServer() {
     try {
-               await connectDB();
+        await connectDB();
         console.log('✅ Database connected');
 
-        // 🔥 ADD INDEXES (safe — creates only if not exists)
+        // 🔥 ADD INDEXES
         try {
             const FB_Game = require('./src/models/FB_Game');
             const FB_Card = require('./src/models/FB_Card');
-            
             await Promise.all([
                 FB_Game.collection.createIndex({ roomId: 1, status: 1, gameNumber: -1 }),
                 FB_Game.collection.createIndex({ gameId: 1 }),
@@ -154,43 +161,29 @@ async function startServer() {
             console.log('✅ FB indexes ready');
         } catch (idxErr) {
             console.warn('⚠️ FB indexes warning:', idxErr.message);
-            // Don't crash — indexes might already exist
         }
 
-        // Create indexes for old models too (if needed)
         await require('./src/models/indexes')();
 
-        // ══════════════════════════════════════
-        // OLD ENGINES (Keep running)
-        // ══════════════════════════════════════
+        // OLD ENGINES
         const mainBingoEngine = new MainBingoEngine(io);
-        console.log('🔍 MainBingoEngine created:', !!mainBingoEngine);
-        console.log('🔍 drawNumbers method:', typeof mainBingoEngine.drawNumbers);
-
         const gameEngine = new GameEngine(io);
-
         app.set('gameEngine', gameEngine);
         app.set('io', io);
         app.set('mainBingoEngine', mainBingoEngine);
 
-        // Initialize OLD socket handlers
         const gameSocket = new GameSocket(io, gameEngine, mainBingoEngine);
         gameSocket.initialize();
         console.log('✅ Old GameSocket initialized');
 
-        // ══════════════════════════════════════
-        // 🔥 NEW: Fast Bingo Engine + Socket
-        // ══════════════════════════════════════
+        // NEW FB ENGINE
         const fbEngine = new FB_FastBingoEngine(io);
         app.set('fbEngine', fbEngine);
-        console.log('✅ FB_FastBingoEngine created');
-
         const fbSocket = new FB_FastBingoSocket(io, fbEngine);
         fbSocket.initialize();
         console.log('✅ FB_FastBingoSocket initialized');
 
-        // Create first fast bingo game if none exists
-                // 🔥 Create first FB game if none exists
+        // Create first FB game if none exists
         try {
             const FB_Game = require('./src/models/FB_Game');
             const activeGames = await FB_Game.countDocuments({ status: { $ne: 'completed' } });
