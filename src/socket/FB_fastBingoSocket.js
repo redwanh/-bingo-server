@@ -70,6 +70,18 @@ class FB_FastBingoSocket {
 
     // ─── BUY CARD ────────────────────────────
     socket.on('fb_buyCard', async (data, callback) => {
+       
+  console.log('🔵 fb_buyCard - socket.userId:', socket.userId);
+  console.log('🔵 fb_buyCard - socket.username:', socket.username);
+  
+  if (!socket.userId) {
+    console.log('❌ No userId on socket! Auth may have failed.');
+    if (typeof callback === 'function') {
+      callback({ success: false, error: 'Not authenticated' });
+    }
+    return;
+  }
+        
   console.log('🔵🔵🔵 FB SOCKET RECEIVED fb_buyCard:', data);
   console.log('🔵 socket.userId:', socket.userId);
   console.log('🔵 this.roomId:', this.roomId);
