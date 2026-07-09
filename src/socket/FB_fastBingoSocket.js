@@ -1,18 +1,9 @@
 // ============================================================
 // server/src/socket/FB_fastBingoSocket.js
-// Fast Bingo Socket Handler - NEW clean implementation
-// Completely separate from old gameSocket.js
-// All events prefixed with 'fb_' to avoid conflicts
+// PRODUCTION-READY Fast Bingo Socket Handler
 // ============================================================
 
-const jwt = require('jsonwebtoken');
-const User = require('../models/User');
-
 class FB_FastBingoSocket {
-  /**
-   * @param {SocketIO.Server} io - Socket.io server instance
-   * @param {FB_FastBingoEngine} engine - Fast Bingo engine (NEW)
-   */
   constructor(io, engine) {
     this.io = io;
     this.engine = engine;
@@ -20,37 +11,24 @@ class FB_FastBingoSocket {
   }
 
   initialize() {
-    // We DON'T add another io.use() middleware here because
-    // gameSocket.js already has auth middleware that runs first.
-    // The socket.userId is already set when it reaches our handlers.
-
     this.io.on('connection', (socket) => {
-      // Only handle events for fb_fast_bingo room
       this._registerHandlers(socket);
     });
-
     console.log('✅ FB_FastBingoSocket initialized');
   }
 
-  // ==========================================
-  // ALL EVENT HANDLERS
-  // ==========================================
-
   _registerHandlers(socket) {
-
     // ─── JOIN ROOM ───────────────────────────
     socket.on('fb_joinRoom', async (roomId) => {
-      if (roomId !== this.roomId) return; // Only handle fb_fast_bingo
-
-      // Leave all other rooms first
+      if (roomId !== this.roomId) return;
+      
       Array.from(socket.rooms).forEach(room => {
         if (room !== socket.id) socket.leave(room);
       });
-
+      
       socket.join(this.roomId);
-      console.log(`📍 FB: ${socket.username} joined ${this.roomId}`);
+      console.log(`📍 FB: ${socket.username || 'player'} joined ${this.roomId}`);
 
-      // Send current game state
       try {
         const state = await this.engine.getGameState(this.roomId, socket.userId);
         socket.emit('fb_gameState', state);
@@ -60,40 +38,18 @@ class FB_FastBingoSocket {
       }
     });
 
-    // ─── LEAVE ROOM ──────────────────────────
-    socket.on('fb_leaveRoom', (roomId) => {
-      if (roomId === this.roomId) {
-        socket.leave(this.roomId);
-        console.log(`🚪 FB: ${socket.username} left ${this.roomId}`);
-      }
-    });
-
-    // ─── BUY CARD ────────────────────────────
+    // ─── BUY CARD (Production) ───────────────
     socket.on('fb_buyCard', async (data, callback) => {
-       
-  console.log('🔵 fb_buyCard - socket.userId:', socket.userId);
-  console.log('🔵 fb_buyCard - socket.username:', socket.username);
-  
-  if (!socket.userId) {
-    console.log('❌ No userId on socket! Auth may have failed.');
-    if (typeof callback === 'function') {
-      callback({ success: false, error: 'Not authenticated' });
-    }
-    return;
-  }
-        
-  console.log('🔵🔵🔵 FB SOCKET RECEIVED fb_buyCard:', data);
-  console.log('🔵 socket.userId:', socket.userId);
-  console.log('🔵 this.roomId:', this.roomId);
+      if (!socket.userId) {
+        if (typeof callback === 'function') {
+          callback({ success: false, error: 'Please log in again.' });
+        }
+        return;
+      }
+
       try {
         const { cardId } = data;
-        console.log(`🛒 FB: ${socket.username} buying card ${cardId}`);
-
-        const result = await this.engine.purchaseCard(
-          this.roomId,
-          socket.userId,
-          cardId
-        );
+        const result = await this.engine.purchaseCard(this.roomId, socket.userId, cardId);
 
         if (typeof callback === 'function') {
           callback({ success: true, ...result });
@@ -106,32 +62,20 @@ class FB_FastBingoSocket {
       }
     });
 
-    // ─── CALL BINGO (Manual button press) ─────
+    // ─── CALL BINGO ──────────────────────────
     socket.on('fb_callBingo', async (data, callback) => {
       try {
         const { cardId } = data;
-        console.log(`🎯 FB: ${socket.username} calling BINGO on card ${cardId}`);
-
-        const result = await this.engine.callBingo(
-          this.roomId,
-          socket.userId,
-          cardId
-        );
-
-        if (typeof callback === 'function') {
-          callback(result);
-        }
+        const result = await this.engine.callBingo(this.roomId, socket.userId, cardId);
+        if (typeof callback === 'function') callback(result);
       } catch (e) {
         console.error('FB: Call bingo error:', e.message);
-        if (typeof callback === 'function') {
-          callback({ success: false, error: e.message });
-        }
+        if (typeof callback === 'function') callback({ success: false, error: e.message });
       }
     });
 
     // ─── DISCONNECT ───────────────────────────
     socket.on('disconnect', () => {
-      console.log(`🔴 FB: ${socket.username} disconnected`);
       this.engine.removeUserSocket(socket.userId);
     });
   }

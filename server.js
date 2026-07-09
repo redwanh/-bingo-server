@@ -124,8 +124,9 @@ const server = http.createServer(app);
 
 const io = socketIo(server, {
     cors: { origin: '*', methods: ['GET', 'POST'], credentials: true },
-    pingTimeout: 60000,
-    pingInterval: 25000,
+    pingTimeout: 120000,    // 2 minutes
+    pingInterval: 30000,    // 30 seconds
+    connectTimeout: 30000,  // 30 seconds
     maxHttpBufferSize: 1e6,
     transports: ['websocket', 'polling'],
 });
@@ -135,10 +136,28 @@ const io = socketIo(server, {
 // ══════════════════════════════════════
 async function startServer() {
     try {
-        await connectDB();
+               await connectDB();
         console.log('✅ Database connected');
 
-        // Create indexes
+        // 🔥 ADD INDEXES (safe — creates only if not exists)
+        try {
+            const FB_Game = require('./src/models/FB_Game');
+            const FB_Card = require('./src/models/FB_Card');
+            
+            await Promise.all([
+                FB_Game.collection.createIndex({ roomId: 1, status: 1, gameNumber: -1 }),
+                FB_Game.collection.createIndex({ gameId: 1 }),
+                FB_Card.collection.createIndex({ displayId: 1 }),
+                FB_Card.collection.createIndex({ gameId: 1, userId: 1, status: 1 }),
+                FB_Card.collection.createIndex({ gameId: 1, status: 1, isBlocked: 1, bingoCalled: 1 }),
+            ]);
+            console.log('✅ FB indexes ready');
+        } catch (idxErr) {
+            console.warn('⚠️ FB indexes warning:', idxErr.message);
+            // Don't crash — indexes might already exist
+        }
+
+        // Create indexes for old models too (if needed)
         await require('./src/models/indexes')();
 
         // ══════════════════════════════════════
