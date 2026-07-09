@@ -1,3 +1,6 @@
+// ============================================================
+// server.js — FULL UPDATED with 3 rooms
+// ============================================================
 require('dotenv').config();
 const express = require('express');
 const path = require('path');
@@ -25,11 +28,8 @@ const NODE_ENV = process.env.NODE_ENV || 'development';
 const PORT = process.env.PORT || 5000;
 
 const allowedOrigins = [
-    CLIENT_URL,
-    PLAYER_URL,
-    'http://127.0.0.1:3000',
-    'http://127.0.0.1:3001',
-    'http://127.0.0.1:5000',
+    CLIENT_URL, PLAYER_URL,
+    'http://127.0.0.1:3000', 'http://127.0.0.1:3001', 'http://127.0.0.1:5000',
     'https://bingo-admin-9z6w.onrender.com',
     'https://bingo-server-kd6t.onrender.com',
     'https://player-app-0qoe.onrender.com',
@@ -59,18 +59,14 @@ app.use((req, res, next) => {
 
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
-
 if (NODE_ENV === 'development') app.use(morgan('dev'));
 
 app.get('/health', (req, res) => res.json({ status: 'ok', timestamp: new Date().toISOString() }));
-
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 app.use('/voices', express.static('public/voices'));
 app.use(express.static('public'));
 
-// ══════════════════════════════════════
 // API ROUTES
-// ══════════════════════════════════════
 app.use('/api/auth', require('./src/routes/authRoutes'));
 app.use('/api/users', require('./src/routes/userRoutes'));
 app.use('/api/payments', require('./src/routes/paymentRoutes'));
@@ -88,14 +84,9 @@ app.use('/api/game', require('./src/routes/gameRoutes'));
 app.use('/api/scheduled-games', require('./src/routes/scheduledGameRoutes'));
 app.use('/api/user-game-history', require('./src/routes/UserGameHistory'));
 app.use('/api/main-bingo-history', require('./src/routes/MainBingoHistory'));
-
-// 🔥 NEW: Fast Bingo routes
 app.use('/api/fb', require('./src/routes/FB_fastBingoRoutes'));
 
-// ══════════════════════════════════════
 // STATIC FILES (PRODUCTION)
-// 🔥 FIX: Look for player-app build AND client build
-// ══════════════════════════════════════
 const buildPaths = [
     path.join(__dirname, '..', 'player-app', 'build'),
     path.join(__dirname, '..', 'client', 'build'),
@@ -108,7 +99,6 @@ const clientBuildPath = buildPaths.find(p => fs.existsSync(p));
 if (clientBuildPath) {
     console.log('📁 Serving static files from:', clientBuildPath);
     app.use(express.static(clientBuildPath));
-    // 🔥 CATCH-ALL: Serve index.html for all non-API routes (SPA routing)
     app.get('*', (req, res, next) => {
         if (req.path.startsWith('/api')) return next();
         if (req.path.startsWith('/health')) return next();
@@ -125,29 +115,21 @@ if (clientBuildPath) {
 
 app.use(errorHandler);
 
-// ══════════════════════════════════════
 // SERVER & SOCKET SETUP
-// ══════════════════════════════════════
 const server = http.createServer(app);
-
 const io = socketIo(server, {
     cors: { origin: '*', methods: ['GET', 'POST'], credentials: true },
-    pingTimeout: 120000,
-    pingInterval: 30000,
-    connectTimeout: 30000,
-    maxHttpBufferSize: 1e6,
-    transports: ['websocket', 'polling'],
+    pingTimeout: 120000, pingInterval: 30000, connectTimeout: 30000,
+    maxHttpBufferSize: 1e6, transports: ['websocket', 'polling'],
 });
 
-// ══════════════════════════════════════
 // START SERVER
-// ══════════════════════════════════════
 async function startServer() {
     try {
         await connectDB();
         console.log('✅ Database connected');
 
-        // 🔥 ADD INDEXES
+        // ADD INDEXES
         try {
             const FB_Game = require('./src/models/FB_Game');
             const FB_Card = require('./src/models/FB_Card');
@@ -183,24 +165,27 @@ async function startServer() {
         fbSocket.initialize();
         console.log('✅ FB_FastBingoSocket initialized');
 
-        // Create first FB game if none exists
+        // 🔥 CREATE FIRST GAMES FOR ALL 3 ROOMS
+        const FB_ROOMS = ['fb_fast_bingo_10', 'fb_fast_bingo_20', 'fb_fast_bingo_30'];
         try {
             const FB_Game = require('./src/models/FB_Game');
-            const activeGames = await FB_Game.countDocuments({ status: { $ne: 'completed' } });
-            if (activeGames === 0) {
-                const lastNum = await FB_Game.getLatestGameNumber('fb_fast_bingo');
-                await FB_Game.create({
-                    gameId: String(lastNum + 1).padStart(10, '0'),
-                    gameNumber: lastNum + 1,
-                    roomId: 'fb_fast_bingo',
-                    status: 'scheduled',
-                    allNumbers: fbEngine.shuffleNumbers(),
-                    timerDuration: 30
-                });
-                console.log(`🆕 FB: Created first game #${lastNum + 1}`);
+            for (const roomId of FB_ROOMS) {
+                const activeGames = await FB_Game.countDocuments({ roomId, status: { $ne: 'completed' } });
+                if (activeGames === 0) {
+                    const lastNum = await FB_Game.getLatestGameNumber(roomId);
+                    await FB_Game.create({
+                        gameId: String(lastNum + 1).padStart(10, '0'),
+                        gameNumber: lastNum + 1,
+                        roomId,
+                        status: 'scheduled',
+                        allNumbers: fbEngine.shuffleNumbers(),
+                        timerDuration: 30
+                    });
+                    console.log(`🆕 FB: Created first game for ${roomId} (#${lastNum + 1})`);
+                }
             }
         } catch (err) {
-            console.error('❌ FB: Error creating first game:', err.message);
+            console.error('❌ FB: Error creating first games:', err.message);
         }
 
         server.listen(PORT, () => {
