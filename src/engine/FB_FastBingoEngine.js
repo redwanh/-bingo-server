@@ -184,119 +184,166 @@ class FB_FastBingoEngine {
   // =====================
   // CARD PURCHASE (Atomic)
   // =====================
-  async purchaseCard(roomId, userId, cardId) {
-    const game = await Game.getActiveGame(roomId);
-    if (!game || !['scheduled', 'waiting'].includes(game.status)) {
-      throw new Error(ERRORS.GAME_NOT_OPEN);
-    }
-
-    const config = await GameConfig.findOne({ roomId });
-    if (!config) throw new Error(ERRORS.CONFIG_NOT_FOUND);
-
-    if (game.timerStartedAt && game.timerDuration) {
-      const timerEnd = new Date(game.timerStartedAt).getTime() + (game.timerDuration * 1000);
-      if (Date.now() >= timerEnd) throw new Error(ERRORS.TIMER_EXPIRED);
-    }
-
-    const myCardsCount = await Card.countDocuments({ gameId: game._id, userId, status: 'registered' });
-    if (myCardsCount >= config.maxCardsPerPlayer) throw new Error(ERRORS.MAX_CARDS);
-
-    // Atomic card claim
-    const card = await Card.findOneAndUpdate(
-      { _id: cardId, status: 'available' },
-      { $set: { status: 'reserved', reservedAt: new Date(), reservedBy: userId } },
-      { new: true }
-    );
-    if (!card) throw new Error(ERRORS.CARD_UNAVAILABLE);
-
-    // Atomic balance deduction
-    const user = await User.findOneAndUpdate(
-      { _id: userId, walletBalance: { $gte: config.cardPrice } },
-      { $inc: { walletBalance: -config.cardPrice } },
-      { new: true }
-    );
-    if (!user) {
-      await Card.findByIdAndUpdate(cardId, { $set: { status: 'available', reservedBy: null, reservedAt: null } });
-      throw new Error(ERRORS.INSUFFICIENT_BALANCE);
-    }
-
-    // Finalize card
-    card.status = 'registered';
-    card.userId = userId;
-    card.gameId = game._id;
-    card.cardNumber = game.totalCards + 1;
-    card.price = config.cardPrice;
-    card.registeredAt = new Date();
-    card.reservedBy = null;
-    card.reservedAt = null;
-    await card.save();
-
-    // 🔥 Atomic game update — no version conflicts
-    const isFirstPlayer = game.players.length === 0;
-    const playerIndex = game.players.findIndex(p => p.userId.toString() === userId);
-
-    const gameUpdate = {
-      $inc: { totalCards: 1, prizePool: config.cardPrice },
-    };
-
-    if (playerIndex === -1) {
-      gameUpdate.$push = { players: { userId, cards: [card._id] } };
-    } else {
-      gameUpdate.$push = { [`players.${playerIndex}.cards`]: card._id };
-    }
-
-    if (isFirstPlayer) {
-      gameUpdate.$set = {
-        timerStartedAt: new Date(),
-        timerDuration: config.waitTimeSeconds,
-        status: 'waiting',
-      };
-    }
-
-    const updatedGame = await Game.findOneAndUpdate(
-      { _id: game._id, status: { $in: ['scheduled', 'waiting'] } },
-      gameUpdate,
-      { new: true }
-    );
-
-    if (!updatedGame) {
-      await Card.findByIdAndUpdate(cardId, { $set: { status: 'available', reservedBy: null, reservedAt: null } });
-      await User.findByIdAndUpdate(userId, { $inc: { walletBalance: config.cardPrice } });
-      throw new Error(ERRORS.GAME_CHANGED);
-    }
-
-    // Create transaction
-    await Transaction.create({
-      userId, type: 'card_purchase', amount: -config.cardPrice,
-      balanceAfter: user.walletBalance, gameId: game.gameId,
-      gameNumber: game.gameNumber, description: `Card #${card.cardNumber}`,
-      cardId: card._id, status: 'completed'
-    });
-
-    // Emit events
-    this.io.to(roomId).emit('cardPurchased', {
-      userId, cardId: card._id, cardNumber: card.cardNumber,
-      displayId: card.displayId, totalCards: updatedGame.totalCards,
-      prizePool: updatedGame.prizePool, playerCount: updatedGame.players.length,
-      timerStartedAt: updatedGame.timerStartedAt,
-      timerDuration: updatedGame.timerDuration,
-      card: { _id: card._id, cardNumber: card.cardNumber, displayId: card.displayId, grid: card.grid }
-    });
-
-    const buyerSocket = this.getUserSocket(userId);
-    if (buyerSocket) {
-      buyerSocket.emit('balanceUpdated', { newBalance: user.walletBalance });
-    }
-
-    if (isFirstPlayer) {
-      this.startCountdown(roomId, updatedGame, config);
-    }
-
-    return {
-      success: true, cardId: card._id, cardNumber: card.cardNumber,
-      newBalance: user.walletBalance, cardsOwned: myCardsCount + 1
-    };
+// ============================================================
+// CARD PURCHASE (Atomic) — Full debug version
+// ============================================================
+async purchaseCard(roomId, userId, cardId) {
+  console.log('🟢🟢🟢 purchaseCard START', { roomId, userId, cardId });
+  
+  // Step 1: Get game
+  console.log('📡 Step 1: Finding active game...');
+  const game = await Game.getActiveGame(roomId);
+  console.log('📡 Game found:', game ? `#${game.gameNumber} status=${game.status} players=${game.players?.length}` : 'NULL');
+  
+  if (!game || !['scheduled', 'waiting'].includes(game.status)) {
+    console.log('❌ FAIL: Game not open. Status:', game?.status);
+    throw new Error(ERRORS.GAME_NOT_OPEN);
   }
+
+  // Step 2: Get config
+  console.log('📡 Step 2: Finding config...');
+  const config = await GameConfig.findOne({ roomId });
+  console.log('📡 Config found:', config ? `price=${config.cardPrice} maxCards=${config.maxCardsPerPlayer}` : 'NULL');
+  if (!config) {
+    console.log('❌ FAIL: No config');
+    throw new Error(ERRORS.CONFIG_NOT_FOUND);
+  }
+
+  // Step 3: Timer check
+  console.log('📡 Step 3: Timer check...');
+  if (game.timerStartedAt && game.timerDuration) {
+    const timerEnd = new Date(game.timerStartedAt).getTime() + (game.timerDuration * 1000);
+    const expired = Date.now() >= timerEnd;
+    console.log('📡 Timer:', { timerEnd: new Date(timerEnd).toISOString(), now: new Date().toISOString(), expired });
+    if (expired) {
+      console.log('❌ FAIL: Timer expired');
+      throw new Error(ERRORS.TIMER_EXPIRED);
+    }
+  }
+
+  // Step 4: Card count
+  console.log('📡 Step 4: Counting player cards...');
+  const myCardsCount = await Card.countDocuments({ gameId: game._id, userId, status: 'registered' });
+  console.log('📡 myCardsCount:', myCardsCount, '/ max:', config.maxCardsPerPlayer);
+  if (myCardsCount >= config.maxCardsPerPlayer) {
+    console.log('❌ FAIL: Max cards');
+    throw new Error(ERRORS.MAX_CARDS);
+  }
+
+  // Step 5: Claim card
+  console.log('📡 Step 5: Claiming card...', cardId);
+  const card = await Card.findOneAndUpdate(
+    { _id: cardId, status: 'available' },
+    { $set: { status: 'reserved', reservedAt: new Date(), reservedBy: userId } },
+    { new: true }
+  );
+  console.log('📡 Card claimed:', card ? `YES _id=${card._id} status=${card.status}` : 'NULL');
+  if (!card) {
+    // Check why
+    const existing = await Card.findById(cardId);
+    console.log('❌ FAIL: Card unavailable. Exists:', existing ? `status=${existing.status} userId=${existing.userId}` : 'NOT FOUND');
+    throw new Error(ERRORS.CARD_UNAVAILABLE);
+  }
+
+  // Step 6: Deduct balance
+  console.log('📡 Step 6: Deducting balance...', config.cardPrice);
+  const user = await User.findOneAndUpdate(
+    { _id: userId, walletBalance: { $gte: config.cardPrice } },
+    { $inc: { walletBalance: -config.cardPrice } },
+    { new: true }
+  );
+  console.log('📡 User after deduction:', user ? `balance=${user.walletBalance}` : 'NULL');
+  if (!user) {
+    console.log('❌ FAIL: Insufficient balance. Rolling back card...');
+    await Card.findByIdAndUpdate(cardId, { $set: { status: 'available', reservedBy: null, reservedAt: null } });
+    throw new Error(ERRORS.INSUFFICIENT_BALANCE);
+  }
+
+  // Step 7: Finalize card
+  console.log('📡 Step 7: Finalizing card...');
+  card.status = 'registered';
+  card.userId = userId;
+  card.gameId = game._id;
+  card.cardNumber = game.totalCards + 1;
+  card.price = config.cardPrice;
+  card.registeredAt = new Date();
+  card.reservedBy = null;
+  card.reservedAt = null;
+  await card.save();
+  console.log('✅ Card saved:', { id: card._id, cardNumber: card.cardNumber, status: card.status });
+
+  // Step 8: Update game atomically
+  console.log('📡 Step 8: Updating game atomically...');
+  const isFirstPlayer = game.players.length === 0;
+  const playerIndex = game.players.findIndex(p => p.userId.toString() === userId);
+  console.log('📡 isFirstPlayer:', isFirstPlayer, 'playerIndex:', playerIndex);
+
+  const gameUpdate = { $inc: { totalCards: 1, prizePool: config.cardPrice } };
+  if (playerIndex === -1) {
+    gameUpdate.$push = { players: { userId, cards: [card._id] } };
+  } else {
+    gameUpdate.$push = { [`players.${playerIndex}.cards`]: card._id };
+  }
+  if (isFirstPlayer) {
+    gameUpdate.$set = { timerStartedAt: new Date(), timerDuration: config.waitTimeSeconds, status: 'waiting' };
+  }
+
+  console.log('📡 gameUpdate:', JSON.stringify(gameUpdate));
+  const updatedGame = await Game.findOneAndUpdate(
+    { _id: game._id, status: { $in: ['scheduled', 'waiting'] } },
+    gameUpdate,
+    { new: true }
+  );
+  console.log('📡 Game updated:', updatedGame ? `totalCards=${updatedGame.totalCards} prizePool=${updatedGame.prizePool}` : 'NULL');
+
+  if (!updatedGame) {
+    console.log('❌ FAIL: Game changed during update. Rolling back...');
+    await Card.findByIdAndUpdate(cardId, { $set: { status: 'available', reservedBy: null, reservedAt: null } });
+    await User.findByIdAndUpdate(userId, { $inc: { walletBalance: config.cardPrice } });
+    throw new Error(ERRORS.GAME_CHANGED);
+  }
+
+  // Step 9: Create transaction
+  console.log('📡 Step 9: Creating transaction...');
+  await Transaction.create({
+    userId, type: 'card_purchase', amount: -config.cardPrice,
+    balanceAfter: user.walletBalance, gameId: game.gameId,
+    gameNumber: game.gameNumber, description: `Card #${card.cardNumber}`,
+    cardId: card._id, status: 'completed'
+  });
+  console.log('✅ Transaction created');
+
+  // Step 10: Emit events
+  console.log('📡 Step 10: Emitting events...');
+  this.io.to(roomId).emit('cardPurchased', {
+    userId, cardId: card._id, cardNumber: card.cardNumber,
+    displayId: card.displayId, totalCards: updatedGame.totalCards,
+    prizePool: updatedGame.prizePool, playerCount: updatedGame.players.length,
+    timerStartedAt: updatedGame.timerStartedAt,
+    timerDuration: updatedGame.timerDuration,
+    card: { _id: card._id, cardNumber: card.cardNumber, displayId: card.displayId, grid: card.grid }
+  });
+  console.log('✅ cardPurchased emitted');
+
+  const buyerSocket = this.getUserSocket(userId);
+  console.log('📡 buyerSocket:', buyerSocket ? 'FOUND' : 'NOT FOUND');
+  if (buyerSocket) {
+    buyerSocket.emit('balanceUpdated', { newBalance: user.walletBalance });
+    console.log('✅ balanceUpdated emitted to buyer');
+  }
+
+  // Step 11: Start countdown if first player
+  if (isFirstPlayer) {
+    console.log('📡 First player — starting countdown...');
+    this.startCountdown(roomId, updatedGame, config);
+  }
+
+  console.log('🟢🟢🟢 purchaseCard COMPLETE — returning success');
+  return {
+    success: true, cardId: card._id, cardNumber: card.cardNumber,
+    newBalance: user.walletBalance, cardsOwned: myCardsCount + 1
+  };
+}
 
   // =====================
   // COUNTDOWN & GAME START
